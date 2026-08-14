@@ -19,6 +19,23 @@ public enum Weekday {
         byName[name.lowercased().trimmingCharacters(in: .whitespaces)]
     }
 
+    /// Canonical short names, for writing a config back out.
+    static let shortNames: [Int: String] = [
+        1: "sun", 2: "mon", 3: "tue", 4: "wed", 5: "thu", 6: "fri", 7: "sat",
+    ]
+
+    public static func name(for component: Int) -> String? {
+        shortNames[component]
+    }
+
+    /// Week order starting Monday, so a written config reads
+    /// `["sat", "sun"]` rather than `["sun", "sat"]`.
+    public static func sortedForWriting(_ components: Set<Int>) -> [Int] {
+        components.sorted { lhs, rhs in
+            ((lhs + 5) % 7) < ((rhs + 5) % 7)
+        }
+    }
+
     /// True when every moment of the event falls on a skipped weekday.
     ///
     /// Deliberately not "the day it starts on". An event running Saturday
