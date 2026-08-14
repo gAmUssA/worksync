@@ -92,7 +92,22 @@ public enum SyncPlanner {
         window: Interval,
         calendar: Calendar = .current
     ) -> [DesiredBlock] {
-        let eligible = events.filter { event in
+        blocks(
+            source: source,
+            targetCalendar: targetCalendar,
+            eligibleEvents: eligible(events, for: source),
+            window: window,
+            calendar: calendar
+        )
+    }
+
+    /// SPEC §5 step 3: the per-source eligibility filters, separated from the
+    /// transform so cross-source dedup can run between them (step 5). Dedup has
+    /// to see exactly the events a source would actually mirror: an event a
+    /// source filters out must never claim an identity and thereby block a
+    /// later source from producing it.
+    public static func eligible(_ events: [StoredEvent], for source: SourceConfig) -> [StoredEvent] {
+        events.filter { event in
             // No usable identity means no stable marker key: two such events
             // would hash to the same key and silently collapse into one entry
             // in reconcile()'s desired map, dropping a blocker with no trace.
@@ -115,7 +130,17 @@ public enum SyncPlanner {
             }
             return true
         }
+    }
 
+    /// SPEC §5 step 4: padding, within-source coalescing, and window filtering.
+    /// Assumes `eligibleEvents` has already passed step 3.
+    static func blocks(
+        source: SourceConfig,
+        targetCalendar: CalendarRef,
+        eligibleEvents eligible: [StoredEvent],
+        window: Interval,
+        calendar: Calendar = .current
+    ) -> [DesiredBlock] {
         // All-day events become all-day blockers on the same date span; they are
         // never padded or coalesced with timed events.
         let allDay = eligible.filter(\.isAllDay)

@@ -1,11 +1,11 @@
 ---
 # worksync-xli7
 title: 'M3: Multi-source, dedup, conflict check'
-status: todo
+status: in-progress
 type: milestone
 priority: normal
 created_at: 2026-08-14T00:33:15Z
-updated_at: 2026-08-14T00:33:43Z
+updated_at: 2026-08-14T02:56:36Z
 blocked_by:
     - worksync-ud6v
 ---

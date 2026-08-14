@@ -75,20 +75,22 @@ struct Sync: ParsableCommand {
         }
     }
 
-    /// The shared read-and-plan pipeline (SPEC §5 steps 1–6, 8-as-diff).
-    /// Cross-source dedup (step 5) and the conflict check (step 7) land in M3.
+    /// The shared read-and-plan pipeline (SPEC §5, steps 1–8).
     static func plan(config: Config, store: CalendarStore, now: Date, verbose: Bool) throws -> SyncPlan {
         let calendars = try store.calendars()
         let resolved = try Resolver.resolve(config: config, calendars: calendars)
         let window = SyncPlanner.window(now: now, windowDays: config.general.windowDays)
 
-        var desired: [DesiredBlock] = []
+        // Steps 2–3: fetch per source, in config order — the order decides who
+        // wins cross-source dedup below.
+        var inputs: [SourcePlanInput] = []
         for source in config.sources {
             guard let sourceCal = resolved.sourceCalendars[source.id],
                   let targetCal = resolved.targetCalendars[source.id] else { continue }
             let events = try store.events(in: sourceCal, from: window.start, to: window.end)
             if verbose {
-                print("source \(source.id): fetched \(events.count) events from \(sourceCal.title)")
+                print("source \(source.id): fetched \(events.count) events from \(sourceCal.title)"
+                    + " -> \(targetCal.title)")
             }
             // Never drop these silently: without an identifier they cannot be
             // reconciled idempotently, so they produce no blocker at all.
@@ -99,17 +101,40 @@ struct Sync: ParsableCommand {
                         .utf8
                 ))
             }
-            desired += SyncPlanner.desiredBlocks(
-                source: source, targetCalendar: targetCal, events: events, window: window
-            )
+            inputs.append(SourcePlanInput(source: source, targetCalendar: targetCal, events: events))
         }
 
+        // Steps 4–5: dedup across sources, then transform.
+        let multi = SyncPlanner.desiredAcrossSources(inputs, window: window)
+        if verbose {
+            for sourceID in multi.duplicatesDropped.keys.sorted() {
+                print("source \(sourceID): \(multi.duplicatesDropped[sourceID]!) event(s)"
+                    + " already claimed by an earlier source")
+            }
+        }
+
+        // Step 6: one fetch of the target calendars, reused by both the
+        // conflict check and reconciliation.
         var existing: [StoredEvent] = []
         for target in resolved.allTargets {
             existing += try store.events(in: target, from: window.start, to: window.end)
         }
 
-        return SyncPlanner.reconcile(desired: desired, existingOnTargets: existing)
+        // Step 7: drop blocks the work calendar already covers.
+        let conflict = SyncPlanner.applyConflictSkips(
+            to: multi.blocks, existingOnTargets: existing, sources: config.sources
+        )
+        if verbose {
+            for sourceID in conflict.skippedBySource.keys.sorted() {
+                print("source \(sourceID): \(conflict.skippedBySource[sourceID]!) block(s)"
+                    + " skipped — work calendar already busy")
+            }
+        }
+
+        // Step 8: reconcile.
+        var plan = SyncPlanner.reconcile(desired: conflict.kept, existingOnTargets: existing)
+        plan.skippedCount = conflict.skipped
+        return plan
     }
 
     private func printPlan(_ plan: SyncPlan) {

@@ -1,11 +1,11 @@
 ---
 # worksync-8za6
 title: Cross-source dedup on (externalId, occurrenceDate)
-status: todo
+status: in-progress
 type: feature
 priority: normal
 created_at: 2026-08-14T00:35:02Z
-updated_at: 2026-08-14T00:36:15Z
+updated_at: 2026-08-14T02:56:36Z
 parent: worksync-xli7
 blocked_by:
     - worksync-xr29
