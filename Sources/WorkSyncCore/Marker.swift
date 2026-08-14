@@ -17,7 +17,7 @@ public struct Marker: Hashable, Sendable {
     public let key: String
 
     public init(sourceID: String, key: String) {
-        self.version = Self.currentVersion
+        version = Self.currentVersion
         self.sourceID = sourceID
         self.key = key
     }
@@ -28,7 +28,9 @@ public struct Marker: Hashable, Sendable {
         self.key = key
     }
 
-    public var isCurrentVersion: Bool { version == Self.currentVersion }
+    public var isCurrentVersion: Bool {
+        version == Self.currentVersion
+    }
 
     /// worksync://v1/<source_id>/<key>
     public var urlString: String {

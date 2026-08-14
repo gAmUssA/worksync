@@ -79,14 +79,13 @@ public final class EventKitStore: CalendarStore {
     }
 
     static func map(_ event: EKEvent, calendarId: String) -> StoredEvent {
-        let availability: EventAvailability
-        switch event.availability {
-        case .busy: availability = .busy
-        case .free: availability = .free
-        case .tentative: availability = .tentative
-        case .unavailable: availability = .unavailable
-        case .notSupported: availability = .notSupported
-        @unknown default: availability = .notSupported
+        let availability: EventAvailability = switch event.availability {
+        case .busy: .busy
+        case .free: .free
+        case .tentative: .tentative
+        case .unavailable: .unavailable
+        case .notSupported: .notSupported
+        @unknown default: .notSupported
         }
 
         var declined = false

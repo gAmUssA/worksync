@@ -82,20 +82,20 @@ public enum ConfigError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .fileNotFound(let path):
-            return "Config file not found at \(path)"
-        case .parseFailure(let detail):
-            return "Failed to parse config: \(detail)"
-        case .missingField(let field):
-            return "Missing required config field: \(field)"
-        case .invalidValue(let field, let value, let allowed):
-            return "Invalid value \"\(value)\" for \(field); allowed: \(allowed)"
-        case .duplicateSourceID(let id):
-            return "Duplicate source id \"\(id)\"; source ids must be unique"
+        case let .fileNotFound(path):
+            "Config file not found at \(path)"
+        case let .parseFailure(detail):
+            "Failed to parse config: \(detail)"
+        case let .missingField(field):
+            "Missing required config field: \(field)"
+        case let .invalidValue(field, value, allowed):
+            "Invalid value \"\(value)\" for \(field); allowed: \(allowed)"
+        case let .duplicateSourceID(id):
+            "Duplicate source id \"\(id)\"; source ids must be unique"
         case .emptySourceID:
-            return "A [[source]] block has an empty id; ids are embedded in event markers and must be non-empty"
+            "A [[source]] block has an empty id; ids are embedded in event markers and must be non-empty"
         case .noSources:
-            return "Config defines no [[source]] blocks; nothing to sync"
+            "Config defines no [[source]] blocks; nothing to sync"
         }
     }
 }
@@ -121,17 +121,27 @@ public enum ConfigLoader {
 
         var general = GeneralConfig()
         if let g = table["general"]?.table {
-            if let v = g["window_days"]?.int { general.windowDays = v }
-            if let v = g["interval_minutes"]?.int { general.intervalMinutes = v }
-            if let v = g["timezone"]?.string { general.timezone = v }
+            if let v = g["window_days"]?.int {
+                general.windowDays = v
+            }
+            if let v = g["interval_minutes"]?.int {
+                general.intervalMinutes = v
+            }
+            if let v = g["timezone"]?.string {
+                general.timezone = v
+            }
             if let v = g["log_level"]?.string {
                 general.logLevel = try parseEnum(v, field: "general.log_level")
             }
             if let v = g["notify"]?.string {
                 general.notify = try parseEnum(v, field: "general.notify")
             }
-            if let v = g["change_driven"]?.bool { general.changeDriven = v }
-            if let v = g["change_debounce_seconds"]?.int { general.changeDebounceSeconds = v }
+            if let v = g["change_driven"]?.bool {
+                general.changeDriven = v
+            }
+            if let v = g["change_debounce_seconds"]?.int {
+                general.changeDebounceSeconds = v
+            }
         }
 
         guard let t = table["target"]?.table else {
@@ -161,15 +171,33 @@ public enum ConfigLoader {
                     throw ConfigError.missingField("source \"\(id)\".calendar")
                 }
                 var source = SourceConfig(id: id, account: account, calendar: calendar)
-                if let v = s["title_template"]?.string { source.titleTemplate = v }
-                if let v = s["target_calendar"]?.string { source.targetCalendar = v }
-                if let v = s["coalesce"]?.bool { source.coalesce = v }
-                if let v = s["coalesce_gap_minutes"]?.int { source.coalesceGapMinutes = v }
-                if let v = s["min_duration_minutes"]?.int { source.minDurationMinutes = v }
-                if let v = s["padding_before_minutes"]?.int { source.paddingBeforeMinutes = v }
-                if let v = s["padding_after_minutes"]?.int { source.paddingAfterMinutes = v }
-                if let v = s["include_all_day"]?.bool { source.includeAllDay = v }
-                if let v = s["skip_if_work_busy"]?.bool { source.skipIfWorkBusy = v }
+                if let v = s["title_template"]?.string {
+                    source.titleTemplate = v
+                }
+                if let v = s["target_calendar"]?.string {
+                    source.targetCalendar = v
+                }
+                if let v = s["coalesce"]?.bool {
+                    source.coalesce = v
+                }
+                if let v = s["coalesce_gap_minutes"]?.int {
+                    source.coalesceGapMinutes = v
+                }
+                if let v = s["min_duration_minutes"]?.int {
+                    source.minDurationMinutes = v
+                }
+                if let v = s["padding_before_minutes"]?.int {
+                    source.paddingBeforeMinutes = v
+                }
+                if let v = s["padding_after_minutes"]?.int {
+                    source.paddingAfterMinutes = v
+                }
+                if let v = s["include_all_day"]?.bool {
+                    source.includeAllDay = v
+                }
+                if let v = s["skip_if_work_busy"]?.bool {
+                    source.skipIfWorkBusy = v
+                }
                 if let v = s["availability"]?.string {
                     source.availability = try parseEnum(v, field: "source \"\(id)\".availability")
                 }

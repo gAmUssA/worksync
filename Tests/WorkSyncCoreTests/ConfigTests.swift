@@ -108,9 +108,10 @@ final class ConfigTests: XCTestCase {
     }
 
     func testMissingTargetFails() {
-        XCTAssertThrowsError(try ConfigLoader.parse("[[source]]\nid = \"a\"\naccount = \"x\"\ncalendar = \"y\"")) { error in
-            XCTAssertEqual(error as? ConfigError, .missingField("[target]"))
-        }
+        XCTAssertThrowsError(try ConfigLoader
+            .parse("[[source]]\nid = \"a\"\naccount = \"x\"\ncalendar = \"y\"")) { error in
+                XCTAssertEqual(error as? ConfigError, .missingField("[target]"))
+            }
     }
 
     func testNoSourcesFails() {
@@ -153,7 +154,7 @@ final class ConfigTests: XCTestCase {
         calendar = "c"
         """
         XCTAssertThrowsError(try ConfigLoader.parse(toml)) { error in
-            guard case .invalidValue(let field, let value, _) = error as? ConfigError else {
+            guard case let .invalidValue(field, value, _) = error as? ConfigError else {
                 return XCTFail("expected invalidValue, got \(error)")
             }
             XCTAssertEqual(field, "general.log_level")

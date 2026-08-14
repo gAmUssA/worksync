@@ -8,14 +8,14 @@ public enum ResolutionError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .accountNotFound(let account, let available):
-            return "Account \"\(account)\" not found. Available accounts: \(available.joined(separator: ", ")). Run `worksync calendars` for the full list."
-        case .calendarNotFound(let account, let calendar, let available):
-            return "Calendar \"\(calendar)\" not found in account \"\(account)\". Available: \(available.joined(separator: ", ")). Run `worksync calendars` for the full list."
-        case .ambiguous(let account, let calendar, let count):
-            return "\(count) calendars match \"\(calendar)\" in account \"\(account)\". Rename one in Calendar.app to disambiguate."
-        case .sourceIsTarget(let sourceID, let calendar):
-            return "Source \"\(sourceID)\" resolves to target calendar \"\(calendar)\" — refusing to run (feedback loop guard)."
+        case let .accountNotFound(account, available):
+            "Account \"\(account)\" not found. Available accounts: \(available.joined(separator: ", ")). Run `worksync calendars` for the full list."
+        case let .calendarNotFound(account, calendar, available):
+            "Calendar \"\(calendar)\" not found in account \"\(account)\". Available: \(available.joined(separator: ", ")). Run `worksync calendars` for the full list."
+        case let .ambiguous(account, calendar, count):
+            "\(count) calendars match \"\(calendar)\" in account \"\(account)\". Rename one in Calendar.app to disambiguate."
+        case let .sourceIsTarget(sourceID, calendar):
+            "Source \"\(sourceID)\" resolves to target calendar \"\(calendar)\" — refusing to run (feedback loop guard)."
         }
     }
 }

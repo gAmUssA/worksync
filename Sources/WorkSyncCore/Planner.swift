@@ -37,9 +37,35 @@ public struct SyncPlan: Equatable, Sendable {
     public var unchangedCount: Int = 0
     public var skippedCount: Int = 0
 
-    public var createCount: Int { changes.filter { if case .create = $0 { true } else { false } }.count }
-    public var updateCount: Int { changes.filter { if case .update = $0 { true } else { false } }.count }
-    public var deleteCount: Int { changes.filter { if case .delete = $0 { true } else { false } }.count }
+    public var createCount: Int {
+        changes.filter {
+            if case .create = $0 {
+                true
+            } else {
+                false
+            }
+        }.count
+    }
+
+    public var updateCount: Int {
+        changes.filter {
+            if case .update = $0 {
+                true
+            } else {
+                false
+            }
+        }.count
+    }
+
+    public var deleteCount: Int {
+        changes.filter {
+            if case .delete = $0 {
+                true
+            } else {
+                false
+            }
+        }.count
+    }
 
     /// The one-line summary used by logs, the menu bar header, and notifications.
     public var summaryLine: String {
@@ -67,9 +93,15 @@ public enum SyncPlanner {
         calendar: Calendar = .current
     ) -> [DesiredBlock] {
         let eligible = events.filter { event in
-            if event.isDeclinedByUser { return false }
-            if event.availability == .free { return false }
-            if event.isAllDay, !source.includeAllDay { return false }
+            if event.isDeclinedByUser {
+                return false
+            }
+            if event.availability == .free {
+                return false
+            }
+            if event.isAllDay, !source.includeAllDay {
+                return false
+            }
             if !event.isAllDay,
                event.end.timeIntervalSince(event.start) < Double(source.minDurationMinutes) * 60 {
                 return false
@@ -103,9 +135,11 @@ public enum SyncPlanner {
         }
 
         let padded: [(interval: Interval, event: StoredEvent)] = timed.map { event in
-            (Interval(start: event.start, end: event.end)
-                .padded(beforeMinutes: source.paddingBeforeMinutes, afterMinutes: source.paddingAfterMinutes),
-             event)
+            (
+                Interval(start: event.start, end: event.end)
+                    .padded(beforeMinutes: source.paddingBeforeMinutes, afterMinutes: source.paddingAfterMinutes),
+                event
+            )
         }
 
         if source.coalesce {
@@ -195,11 +229,10 @@ public enum SyncPlanner {
         for (event, marker) in managed {
             if let block = desiredByMarker[marker] {
                 matchedMarkers.insert(marker)
-                let availabilityDiffers: Bool
-                if let mapped = availability(event.availability) {
-                    availabilityDiffers = mapped != block.availability
+                let availabilityDiffers: Bool = if let mapped = availability(event.availability) {
+                    mapped != block.availability
                 } else {
-                    availabilityDiffers = false // backend can't express availability
+                    false // backend can't express availability
                 }
                 let differs = event.start != block.interval.start
                     || event.end != block.interval.end
@@ -231,11 +264,11 @@ public enum SyncPlanner {
     /// generate an update solely for availability the backend won't store).
     private static func availability(_ stored: EventAvailability) -> Availability? {
         switch stored {
-        case .busy: return .busy
-        case .free: return .free
-        case .tentative: return .tentative
-        case .unavailable: return .busy
-        case .notSupported: return nil
+        case .busy: .busy
+        case .free: .free
+        case .tentative: .tentative
+        case .unavailable: .busy
+        case .notSupported: nil
         }
     }
 

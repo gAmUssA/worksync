@@ -78,11 +78,11 @@ struct Sync: ParsableCommand {
         }
         for change in plan.changes {
             switch change {
-            case .create(let block):
+            case let .create(block):
                 print("CREATE  [\(block.sourceID)] \"\(block.title)\"  \(fmt(block.interval))")
-            case .update(_, let block):
+            case let .update(_, block):
                 print("UPDATE  [\(block.sourceID)] \"\(block.title)\"  \(fmt(block.interval))")
-            case .delete(_, let marker, let title):
+            case let .delete(_, marker, title):
                 print("DELETE  [\(marker.sourceID)] \"\(title)\"")
             }
         }

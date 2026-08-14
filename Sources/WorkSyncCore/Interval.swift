@@ -10,7 +10,9 @@ public struct Interval: Hashable, Sendable {
         self.end = end
     }
 
-    public var duration: TimeInterval { end.timeIntervalSince(start) }
+    public var duration: TimeInterval {
+        end.timeIntervalSince(start)
+    }
 
     public func overlaps(_ other: Interval) -> Bool {
         start < other.end && other.start < end

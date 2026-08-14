@@ -83,15 +83,15 @@ public enum CalendarStoreError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .accessDenied:
-            return """
+            """
             Calendar access denied. Grant Full Access in \
             System Settings > Privacy & Security > Calendars, then re-run. \
             The first run must happen interactively (e.g. from Terminal) so macOS can show the prompt.
             """
         case .accessRestricted:
-            return "Calendar access is restricted by device policy."
-        case .backendError(let detail):
-            return "Calendar store error: \(detail)"
+            "Calendar access is restricted by device policy."
+        case let .backendError(detail):
+            "Calendar store error: \(detail)"
         }
     }
 }

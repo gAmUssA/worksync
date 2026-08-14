@@ -4,10 +4,10 @@ import PackageDescription
 let package = Package(
     name: "worksync",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v14),
     ],
     products: [
-        .executable(name: "worksync", targets: ["worksync"])
+        .executable(name: "worksync", targets: ["worksync"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
@@ -18,7 +18,7 @@ let package = Package(
         .target(
             name: "WorkSyncCore",
             dependencies: [
-                .product(name: "TOMLKit", package: "TOMLKit")
+                .product(name: "TOMLKit", package: "TOMLKit"),
             ]
         ),
         // EventKit adapter behind the CalendarStore protocol.

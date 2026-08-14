@@ -12,8 +12,8 @@ public final class InMemoryCalendarStore: CalendarStore {
         events: [String: [StoredEvent]] = [:],
         accessGranted: Bool = true
     ) {
-        self.calendarList = calendars
-        self.eventsByCalendar = events
+        calendarList = calendars
+        eventsByCalendar = events
         self.accessGranted = accessGranted
     }
 

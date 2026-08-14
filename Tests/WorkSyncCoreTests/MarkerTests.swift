@@ -14,19 +14,25 @@ final class MarkerTests: XCTestCase {
         let k1 = Marker.key(externalIdentifier: "EXT-1", occurrenceDate: d1)
         XCTAssertEqual(k1, Marker.key(externalIdentifier: "EXT-1", occurrenceDate: d1), "deterministic")
         XCTAssertEqual(k1.count, 16)
-        XCTAssertNotEqual(k1, Marker.key(externalIdentifier: "EXT-1", occurrenceDate: d2),
-                          "same series, different occurrence → different key")
+        XCTAssertNotEqual(
+            k1,
+            Marker.key(externalIdentifier: "EXT-1", occurrenceDate: d2),
+            "same series, different occurrence → different key"
+        )
         XCTAssertNotEqual(k1, Marker.key(externalIdentifier: "EXT-2", occurrenceDate: d1))
     }
 
     func testCoalescedKeyOrderIndependent() {
-        let d1 = Date(timeIntervalSince1970: 1_000)
-        let d2 = Date(timeIntervalSince1970: 2_000)
+        let d1 = Date(timeIntervalSince1970: 1000)
+        let d2 = Date(timeIntervalSince1970: 2000)
         let a = Marker.coalescedKey(constituents: [("X", d1), ("Y", d2)])
         let b = Marker.coalescedKey(constituents: [("Y", d2), ("X", d1)])
         XCTAssertEqual(a, b, "constituent order must not change the key")
-        XCTAssertNotEqual(a, Marker.coalescedKey(constituents: [("X", d1)]),
-                          "gaining/losing a constituent produces a new key")
+        XCTAssertNotEqual(
+            a,
+            Marker.coalescedKey(constituents: [("X", d1)]),
+            "gaining/losing a constituent produces a new key"
+        )
     }
 
     func testExtractPrefersNotesThenURL() {
@@ -34,12 +40,21 @@ final class MarkerTests: XCTestCase {
         let urlMarker = Marker(sourceID: "b", key: "2222222222222222")
         let notes = "\(Marker.notesHeaderLine)\n\(notesMarker.urlString)"
 
-        XCTAssertEqual(Marker.extract(url: urlMarker.urlString, notes: notes), notesMarker,
-                       "notes last line is the primary location")
-        XCTAssertEqual(Marker.extract(url: urlMarker.urlString, notes: nil), urlMarker,
-                       "url is the fallback when notes are stripped")
-        XCTAssertEqual(Marker.extract(url: nil, notes: notes), notesMarker,
-                       "notes alone suffice when the backend drops the url field")
+        XCTAssertEqual(
+            Marker.extract(url: urlMarker.urlString, notes: notes),
+            notesMarker,
+            "notes last line is the primary location"
+        )
+        XCTAssertEqual(
+            Marker.extract(url: urlMarker.urlString, notes: nil),
+            urlMarker,
+            "url is the fallback when notes are stripped"
+        )
+        XCTAssertEqual(
+            Marker.extract(url: nil, notes: notes),
+            notesMarker,
+            "notes alone suffice when the backend drops the url field"
+        )
     }
 
     func testExtractRejectsGarbage() {
@@ -49,11 +64,11 @@ final class MarkerTests: XCTestCase {
         XCTAssertNil(Marker.parse("worksync://nonsense"))
     }
 
-    func testUnknownVersionParsedButNotCurrent() {
+    func testUnknownVersionParsedButNotCurrent() throws {
         let parsed = Marker.parse("worksync://v2/personal/deadbeefdeadbeef")
         XCTAssertNotNil(parsed)
         XCTAssertEqual(parsed?.version, 2)
-        XCTAssertFalse(parsed!.isCurrentVersion, "only v1 markers may ever be mutated")
+        XCTAssertFalse(try XCTUnwrap(parsed?.isCurrentVersion), "only v1 markers may ever be mutated")
     }
 
     func testExtractToleratesUserEditedNotes() {

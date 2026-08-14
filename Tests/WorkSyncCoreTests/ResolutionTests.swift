@@ -36,7 +36,7 @@ final class ResolutionTests: XCTestCase {
         var config = makeConfig()
         config.sources[0].account = "Nope"
         XCTAssertThrowsError(try Resolver.resolve(config: config, calendars: calendars)) { error in
-            guard case .accountNotFound(let name, let available) = error as? ResolutionError else {
+            guard case let .accountNotFound(name, available) = error as? ResolutionError else {
                 return XCTFail("expected accountNotFound, got \(error)")
             }
             XCTAssertEqual(name, "Nope")
@@ -48,7 +48,7 @@ final class ResolutionTests: XCTestCase {
         var config = makeConfig()
         config.sources[0].calendar = "Nope"
         XCTAssertThrowsError(try Resolver.resolve(config: config, calendars: calendars)) { error in
-            guard case .calendarNotFound(_, _, let available) = error as? ResolutionError else {
+            guard case let .calendarNotFound(_, _, available) = error as? ResolutionError else {
                 return XCTFail("expected calendarNotFound, got \(error)")
             }
             XCTAssertEqual(available, ["Personal"])
@@ -57,7 +57,7 @@ final class ResolutionTests: XCTestCase {
 
     func testAmbiguousDuplicateTitlesHardError() {
         let dupes = calendars + [
-            CalendarRef(id: "c5", title: "Personal", accountTitle: "iCloud", allowsModifications: true)
+            CalendarRef(id: "c5", title: "Personal", accountTitle: "iCloud", allowsModifications: true),
         ]
         XCTAssertThrowsError(try Resolver.resolve(config: makeConfig(), calendars: dupes)) { error in
             guard case .ambiguous = error as? ResolutionError else {

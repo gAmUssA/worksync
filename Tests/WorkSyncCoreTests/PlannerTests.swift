@@ -2,10 +2,17 @@ import XCTest
 @testable import WorkSyncCore
 
 final class PlannerTests: XCTestCase {
-    private let targetCal = CalendarRef(id: "target-1", title: "Calendar", accountTitle: "Work", allowsModifications: true)
+    private let targetCal = CalendarRef(
+        id: "target-1",
+        title: "Calendar",
+        accountTitle: "Work",
+        allowsModifications: true
+    )
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private var window: Interval { SyncPlanner.window(now: now, windowDays: 21) }
+    private var window: Interval {
+        SyncPlanner.window(now: now, windowDays: 21)
+    }
 
     private func event(
         ext: String = "EXT",
@@ -51,7 +58,10 @@ final class PlannerTests: XCTestCase {
         let src = source { $0.minDurationMinutes = 15 }
         let blocks = SyncPlanner.desiredBlocks(source: src, targetCalendar: targetCal, events: events, window: window)
         XCTAssertEqual(blocks.count, 1)
-        XCTAssertEqual(blocks[0].marker.key, Marker.key(externalIdentifier: "ok", occurrenceDate: events[0].occurrenceDate))
+        XCTAssertEqual(
+            blocks[0].marker.key,
+            Marker.key(externalIdentifier: "ok", occurrenceDate: events[0].occurrenceDate)
+        )
     }
 
     func testAllDayIncludedWhenConfigured() {
@@ -101,19 +111,32 @@ final class PlannerTests: XCTestCase {
         // Event straddles the window end: must keep its REAL bounds, not clamp.
         let windowEnd = 21.0 * 86400
         let events = [event(ext: "straddle", startOffset: windowEnd - 1800, durationMinutes: 120)]
-        let blocks = SyncPlanner.desiredBlocks(source: source(), targetCalendar: targetCal, events: events, window: window)
+        let blocks = SyncPlanner.desiredBlocks(
+            source: source(),
+            targetCalendar: targetCal,
+            events: events,
+            window: window
+        )
         XCTAssertEqual(blocks.count, 1)
-        XCTAssertEqual(blocks[0].interval.end, now.addingTimeInterval(windowEnd - 1800 + 120 * 60),
-                       "interval end must extend past the window edge, never be clamped to it")
+        XCTAssertEqual(
+            blocks[0].interval.end,
+            now.addingTimeInterval(windowEnd - 1800 + 120 * 60),
+            "interval end must extend past the window edge, never be clamped to it"
+        )
 
         // Fully outside: dropped.
         let outside = [event(ext: "later", startOffset: windowEnd + 86400, durationMinutes: 60)]
-        XCTAssertTrue(SyncPlanner.desiredBlocks(source: source(), targetCalendar: targetCal, events: outside, window: window).isEmpty)
+        XCTAssertTrue(SyncPlanner.desiredBlocks(
+            source: source(),
+            targetCalendar: targetCal,
+            events: outside,
+            window: window
+        ).isEmpty)
     }
 
-    func testTitleTemplateRendering() {
+    func testTitleTemplateRendering() throws {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
         let start = Date(timeIntervalSince1970: 1_700_000_000) // 2023-11-14 UTC, a Tuesday
         let rendered = SyncPlanner.renderTitle("Busy {date} ({weekday})", eventStart: start, calendar: calendar)
         XCTAssertEqual(rendered, "Busy 2023-11-14 (Tuesday)")
@@ -123,11 +146,20 @@ final class PlannerTests: XCTestCase {
 
     func testRecurringOccurrencesAllSurvive() {
         // Three occurrences share one external identifier — all must produce blocks.
-        let events = (0..<3).map { i in
-            event(ext: "SERIES", occurrence: 1_700_000_000 + Double(i) * 86400,
-                  startOffset: Double(i) * 86400 + 3600, durationMinutes: 30)
+        let events = (0 ..< 3).map { i in
+            event(
+                ext: "SERIES",
+                occurrence: 1_700_000_000 + Double(i) * 86400,
+                startOffset: Double(i) * 86400 + 3600,
+                durationMinutes: 30
+            )
         }
-        let blocks = SyncPlanner.desiredBlocks(source: source(), targetCalendar: targetCal, events: events, window: window)
+        let blocks = SyncPlanner.desiredBlocks(
+            source: source(),
+            targetCalendar: targetCal,
+            events: events,
+            window: window
+        )
         XCTAssertEqual(blocks.count, 3, "occurrences sharing an external identifier must not collapse")
         XCTAssertEqual(Set(blocks.map(\.marker.key)).count, 3, "each occurrence gets a distinct key")
     }
@@ -175,12 +207,22 @@ final class PlannerTests: XCTestCase {
 
     func testReconcileUpdatesInPlaceOnDurationChange() {
         let events = [event(ext: "grew", startOffset: 3600, durationMinutes: 60)]
-        let before = SyncPlanner.desiredBlocks(source: source(), targetCalendar: targetCal, events: events, window: window)
+        let before = SyncPlanner.desiredBlocks(
+            source: source(),
+            targetCalendar: targetCal,
+            events: events,
+            window: window
+        )
         let existing = before.map { managedEvent(for: $0) }
 
         // Same start (same occurrenceDate → same key), longer duration.
         let grown = [event(ext: "grew", startOffset: 3600, durationMinutes: 90)]
-        var after = SyncPlanner.desiredBlocks(source: source(), targetCalendar: targetCal, events: grown, window: window)
+        var after = SyncPlanner.desiredBlocks(
+            source: source(),
+            targetCalendar: targetCal,
+            events: grown,
+            window: window
+        )
         // occurrenceDate defaults to start in the helper, so keys match.
         XCTAssertEqual(after[0].marker, before[0].marker)
 
@@ -231,11 +273,21 @@ final class PlannerTests: XCTestCase {
         // A recurring occurrence detached and dragged to a new time keeps its
         // occurrenceDate → same key → in-place update, not delete+create (SPEC §6).
         let original = event(ext: "SERIES", occurrence: 1_700_000_000, startOffset: 3600, durationMinutes: 30)
-        let before = SyncPlanner.desiredBlocks(source: source(), targetCalendar: targetCal, events: [original], window: window)
+        let before = SyncPlanner.desiredBlocks(
+            source: source(),
+            targetCalendar: targetCal,
+            events: [original],
+            window: window
+        )
         let existing = before.map { managedEvent(for: $0) }
 
         let moved = event(ext: "SERIES", occurrence: 1_700_000_000, startOffset: 7200, durationMinutes: 30)
-        let after = SyncPlanner.desiredBlocks(source: source(), targetCalendar: targetCal, events: [moved], window: window)
+        let after = SyncPlanner.desiredBlocks(
+            source: source(),
+            targetCalendar: targetCal,
+            events: [moved],
+            window: window
+        )
         XCTAssertEqual(after[0].marker, before[0].marker, "occurrenceDate keeps identity stable across the move")
 
         let plan = SyncPlanner.reconcile(desired: after, existingOnTargets: existing)
