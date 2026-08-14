@@ -9,6 +9,8 @@ import WorkSyncCore
 /// sidebar defect (SPEC §11.1).
 struct SettingsView: View {
     @Bindable var model: MenuBarModel
+    /// Leaving the id field is a commit point, the same as pressing Return.
+    @FocusState private var idFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,6 +38,20 @@ struct SettingsView: View {
         // simplified version of the auto-fitting panel.
         .frame(width: Theme.width, height: 560)
         .panelBackground()
+        .onChange(of: idFieldFocused) { wasFocused, isFocused in
+            // Only on the way out. Committing on focus gain would judge the
+            // text the moment the user clicked into the field.
+            if wasFocused, !isFocused {
+                model.commitSourceIDDraft()
+            }
+        }
+        .onChange(of: model.selectedSourceID) { _, newValue in
+            // Points the draft at the newly selected row, committing any
+            // half-typed name first so it is neither lost nor carried across.
+            if model.sourceIDDraft?.committedID != newValue {
+                model.seedSourceIDDraft(for: newValue)
+            }
+        }
         .alert(
             "Rename this source?",
             isPresented: Binding(
@@ -190,13 +206,26 @@ struct SettingsView: View {
             let source = config.sources[index]
             card("“\(source.id)” settings") {
                 LabeledContent("Name") {
+                    // Bound to the draft, never straight to the config: routing
+                    // keystrokes at the rename policy made the first differing
+                    // character open the orphan warning, and the field could
+                    // not accumulate a new name at all (SPEC §11.1).
                     TextField("id", text: Binding(
-                        get: { source.id },
-                        set: { model.requestRename(of: selected, to: $0) }
+                        get: { model.sourceIDDraft?.text ?? source.id },
+                        set: { model.sourceIDDraft?.text = $0 }
                     ))
                     .textFieldStyle(.roundedBorder)
+                    .focused($idFieldFocused)
+                    .onSubmit { model.commitSourceIDDraft() }
                 }
                 .font(.callout)
+
+                if let renameError = model.renameError {
+                    Text(renameError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 calendarPickers(
                     account: Binding(

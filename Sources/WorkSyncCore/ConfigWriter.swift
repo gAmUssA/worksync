@@ -15,6 +15,30 @@ public enum ConfigWriteError: Error, LocalizedError, Equatable {
     }
 }
 
+/// How much of the user's original file survived a save.
+///
+/// Reported rather than inferred, because the two outcomes look identical from
+/// the outside: the save succeeds and the values are right either way, but in
+/// one of them every comment the user wrote is gone. Silently returning a file
+/// stripped of its comments is the kind of loss that is only noticed much
+/// later, when there is no undo left.
+public enum ConfigWriteOutcome: Equatable {
+    /// The normal path: only the changed lines were touched.
+    case preserved
+    /// The line edit did not round-trip, so the file was rewritten from
+    /// scratch. Values are correct; comments and layout are lost.
+    case reserialized
+
+    public var warning: String? {
+        switch self {
+        case .preserved: nil
+        case .reserialized:
+            "Settings were saved, but the file had to be rewritten from scratch, "
+                + "so comments and layout were lost. The previous file is at config.toml.bak."
+        }
+    }
+}
+
 /// Writes a `Config` back to disk without destroying the file a human wrote.
 ///
 /// config.toml is hand-editable by definition (SPEC §2), so any programmatic
@@ -30,20 +54,30 @@ public enum ConfigWriter {
     /// Refuses to write anything that does not load back cleanly: a writer that
     /// can hand the next sync pass an unparseable file is worse than one that
     /// refuses to run.
-    public static func save(_ config: Config, to path: String) throws {
+    @discardableResult
+    public static func save(_ config: Config, to path: String) throws -> ConfigWriteOutcome {
+        // Up front, so an invalid config reports what is actually wrong with it
+        // ("Invalid source id …") instead of failing the round-trip check
+        // further down and blaming the writer for refusing to reload its own
+        // output. The file is protected either way; only the message differs.
+        try ConfigLoader.validate(config)
+
         let original = try? String(contentsOfFile: path, encoding: .utf8)
         let previous = original.flatMap { try? ConfigLoader.parse($0) }
 
         let updated: String
+        let outcome: ConfigWriteOutcome
         if let original, let previous {
             let edited = apply(config, previous: previous, to: original)
             // The self-check is on the produced text, not on our own diffing
             // logic, so a bug anywhere upstream still cannot corrupt the file.
             updated = try verified(edited, matches: config, fallback: config)
+            outcome = updated == edited ? .preserved : .reserialized
         } else {
             // No usable original — a brand-new file, or one too broken to parse.
             // Comment loss is unavoidable here and expected (SPEC §4.3 step 6).
             updated = try verified(serialize(config), matches: config, fallback: nil)
+            outcome = original == nil ? .preserved : .reserialized
         }
 
         if original != nil {
@@ -61,6 +95,7 @@ public enum ConfigWriter {
         } catch {
             throw ConfigWriteError.writeFailed(error.localizedDescription)
         }
+        return outcome
     }
 
     /// Parses the produced text and compares it to what was intended.

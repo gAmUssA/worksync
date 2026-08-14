@@ -277,4 +277,76 @@ final class ConfigWriterTests: XCTestCase {
             "the existing config must survive a refused write untouched"
         )
     }
+
+    // MARK: Reporting what survived
+
+    func testANormalSaveReportsThatCommentsSurvived() throws {
+        let directory = NSTemporaryDirectory() + "worksync-writer-\(UUID().uuidString)"
+        let path = directory + "/config.toml"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try original.write(toFile: path, atomically: true, encoding: .utf8)
+
+        var config = try loaded()
+        config.general.windowDays = 45
+
+        XCTAssertEqual(try ConfigWriter.save(config, to: path), .preserved)
+        XCTAssertNil(ConfigWriteOutcome.preserved.warning, "nothing to warn about on the normal path")
+    }
+
+    func testWritingANewFileIsNotReportedAsCommentLoss() throws {
+        // There were no comments to lose, so warning here would train the user
+        // to ignore the warning that matters.
+        let directory = NSTemporaryDirectory() + "worksync-writer-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        XCTAssertEqual(try ConfigWriter.save(loaded(), to: directory + "/config.toml"), .preserved)
+    }
+
+    func testFallingBackToAFullRewriteIsReportedRatherThanSilent() {
+        // The user's comments and layout are gone at this point. A save that
+        // reports plain success here is the one case where the UI would be
+        // actively lying about what it did to the file.
+        XCTAssertNotNil(
+            ConfigWriteOutcome.reserialized.warning,
+            "comment loss must be surfaced, not inferred from a diff later"
+        )
+        XCTAssertTrue(
+            ConfigWriteOutcome.reserialized.warning?.contains(".bak") == true,
+            "the warning has to say where the original went"
+        )
+    }
+
+    func testAnInvalidConfigFailsWithItsOwnReasonNotARoundTripComplaint() throws {
+        // Validating only via the reload check produced "neither the line edit
+        // nor a full rewrite reloaded correctly", which names no field and
+        // reads like a writer bug rather than a typo in the id.
+        let directory = NSTemporaryDirectory() + "worksync-writer-\(UUID().uuidString)"
+        let path = directory + "/config.toml"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try original.write(toFile: path, atomically: true, encoding: .utf8)
+
+        var broken = try loaded()
+        broken.sources[0].id = "team/personal"
+
+        XCTAssertThrowsError(try ConfigWriter.save(broken, to: path)) { error in
+            guard case .invalidSourceID = error as? ConfigError else {
+                return XCTFail("expected ConfigError.invalidSourceID, got \(error)")
+            }
+        }
+    }
+
+    func testAnEmptyIDIsRefusedBeforeAnythingIsWritten() throws {
+        let directory = NSTemporaryDirectory() + "worksync-writer-\(UUID().uuidString)"
+        let path = directory + "/config.toml"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try original.write(toFile: path, atomically: true, encoding: .utf8)
+
+        var broken = try loaded()
+        broken.sources[0].id = ""
+
+        XCTAssertThrowsError(try ConfigWriter.save(broken, to: path))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), original)
+    }
 }

@@ -81,6 +81,12 @@ struct PanelView: View {
     private var dashboard: some View {
         VStack(spacing: 0) {
             header
+            // Shown here rather than in the settings footer because a
+            // successful save closes that screen immediately, which would
+            // dismiss the warning before it had been read.
+            if let warning = model.saveWarning {
+                saveWarningBanner(warning)
+            }
             Divider()
             content
             Divider()
@@ -88,6 +94,26 @@ struct PanelView: View {
         }
         .frame(width: Theme.width)
         .panelBackground()
+    }
+
+    private func saveWarningBanner(_ warning: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(warning)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button {
+                model.saveWarning = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, Theme.padding)
+        .padding(.bottom, 8)
     }
 
     private var header: some View {

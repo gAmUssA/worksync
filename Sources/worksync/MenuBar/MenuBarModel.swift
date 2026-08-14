@@ -53,7 +53,16 @@ final class MenuBarModel {
     private(set) var availableCalendars: [CalendarRef] = []
     private(set) var settingsBlocked: String?
     var saveError: String?
+    /// Set when a save succeeded but could not preserve the file's comments,
+    /// so that loss is visible rather than inferred from a diff much later.
+    var saveWarning: String?
     var pendingRename: PendingRename?
+    /// The id field's text while it is being edited, held apart from
+    /// `editingConfig` so a rename is judged once on commit rather than on
+    /// every keystroke.
+    var sourceIDDraft: SourceIDDraft?
+    /// Why the typed id was refused, shown under the field.
+    var renameError: String?
     /// Ids that exist in the saved file, so a rename of a brand-new source
     /// does not warn about orphaning events that cannot exist yet.
     var savedSourceIDs: Set<String> = []
@@ -258,6 +267,10 @@ extension MenuBarModel {
         settingsBlocked = nil
         loadCalendarChoices()
         selectedSourceID = editingConfig?.sources.first?.id
+        sourceIDDraft = selectedSourceID.map(SourceIDDraft.init(id:))
+        renameError = nil
+        saveError = nil
+        saveWarning = nil
         screen = .settings
     }
 
@@ -265,6 +278,8 @@ extension MenuBarModel {
         screen = .dashboard
         editingConfig = nil
         pendingRename = nil
+        sourceIDDraft = nil
+        renameError = nil
     }
 
     /// Account/calendar choices for the popups, from the same enumeration
@@ -303,6 +318,11 @@ extension MenuBarModel {
     // MARK: Source list
 
     func addSource() {
+        // Before reading editingConfig: an uncommitted rename has to land (or
+        // be refused) while the list still looks the way the user left it.
+        if sourceIDDraft?.isDirty == true {
+            commitSourceIDDraft()
+        }
         guard var config = editingConfig else { return }
         let base = "source"
         var name = base
@@ -316,6 +336,8 @@ extension MenuBarModel {
         config.sources.append(SourceConfig(id: name, account: account, calendar: calendar))
         editingConfig = config
         selectedSourceID = name
+        sourceIDDraft = SourceIDDraft(id: name)
+        renameError = nil
     }
 
     func removeSelectedSource() {
@@ -324,6 +346,11 @@ extension MenuBarModel {
         config.sources.remove(at: index)
         editingConfig = config
         selectedSourceID = config.sources.first?.id
+        // Deliberately not committed first: the draft belongs to the row being
+        // deleted, so applying it would rename a source on its way out.
+        sourceIDDraft = selectedSourceID.map(SourceIDDraft.init(id:))
+        renameError = nil
+        pendingRename = nil
     }
 
     func moveSources(from offsets: IndexSet, to destination: Int) {
@@ -332,19 +359,49 @@ extension MenuBarModel {
         editingConfig = config
     }
 
-    /// Renaming an id orphans every event already written under the old one, so
-    /// it is confirmed rather than applied silently (SPEC §4.1). New sources are
-    /// exempt: nothing exists under them yet.
-    func requestRename(of sourceID: String, to newID: String) {
-        guard let config = editingConfig,
-              let index = config.sources.firstIndex(where: { $0.id == sourceID }) else { return }
-        guard SourceRenamePolicy.needsWarning(
-            renaming: sourceID, to: newID, savedSourceIDs: savedSourceIDs
-        ) else {
-            applyRename(at: index, to: newID)
-            return
+    // MARK: Renaming a source
+
+    /// Points the draft at `sourceID`, committing whatever was being typed
+    /// first.
+    ///
+    /// Called when the selection changes, so switching rows cannot quietly
+    /// discard a half-typed name — and cannot carry it over to the row the user
+    /// just clicked either, since the draft resolves against its own
+    /// `committedID` rather than against the selection.
+    func seedSourceIDDraft(for sourceID: String?) {
+        if sourceIDDraft?.isDirty == true {
+            commitSourceIDDraft()
         }
-        pendingRename = PendingRename(index: index, from: sourceID, to: newID)
+        renameError = nil
+        sourceIDDraft = sourceID.map(SourceIDDraft.init(id:))
+    }
+
+    /// Judges the accumulated draft text once, on commit — Enter, leaving the
+    /// field, switching rows, or saving.
+    ///
+    /// Never on a keystroke: doing that made the first differing character
+    /// count as a rename, so the warning opened mid-word and confirming it
+    /// committed a partial id, orphaning every event under the real one.
+    func commitSourceIDDraft() {
+        guard let draft = sourceIDDraft, let config = editingConfig else { return }
+        guard let index = config.sources.firstIndex(where: { $0.id == draft.committedID }) else { return }
+        let others = config.sources.enumerated()
+            .filter { $0.offset != index }
+            .map(\.element.id)
+
+        switch draft.commit(savedSourceIDs: savedSourceIDs, otherSourceIDs: others) {
+        case .unchanged:
+            renameError = nil
+            sourceIDDraft?.revert() // normalizes away stray whitespace
+        case let .rejected(reason):
+            renameError = reason
+        case let .apply(newID):
+            renameError = nil
+            applyRename(at: index, to: newID)
+        case let .confirm(from, to):
+            renameError = nil
+            pendingRename = PendingRename(index: index, from: from, to: to)
+        }
     }
 
     func confirmPendingRename() {
@@ -353,8 +410,11 @@ extension MenuBarModel {
         pendingRename = nil
     }
 
+    /// Cancelling puts the field back to the id the config still holds, so it
+    /// never shows a name that was not applied.
     func cancelPendingRename() {
         pendingRename = nil
+        sourceIDDraft?.revert()
     }
 
     private func applyRename(at index: Int, to newID: String) {
@@ -362,6 +422,7 @@ extension MenuBarModel {
         config.sources[index].id = newID
         editingConfig = config
         selectedSourceID = newID
+        sourceIDDraft?.markCommitted(newID)
     }
 
     // MARK: Saving
@@ -369,10 +430,21 @@ extension MenuBarModel {
     /// Writes through the same writer everything else uses — comment
     /// preserving, self-checked, backed up. Never a UI-only write path.
     func saveSettings() {
+        // Save is a commit point for the id field too. Without this, a name
+        // typed but never submitted is silently dropped by the save it looks
+        // like it was part of.
+        if sourceIDDraft?.isDirty == true {
+            commitSourceIDDraft()
+        }
+        // A refused id or an open warning has to be resolved first, otherwise
+        // saving writes the old id while the field still shows the new one.
+        guard renameError == nil, pendingRename == nil else { return }
+
         guard let config = editingConfig else { return }
         do {
-            try ConfigWriter.save(config, to: configPath)
+            let outcome = try ConfigWriter.save(config, to: configPath)
             saveError = nil
+            saveWarning = outcome.warning
             savedSourceIDs = Set(config.sources.map(\.id))
             configError = nil
             // Config is re-read at the start of every pass, so the change takes
