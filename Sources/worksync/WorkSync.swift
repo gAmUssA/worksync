@@ -5,12 +5,17 @@ import WorkSyncKit
 
 let worksyncVersion = "0.1.0"
 
-/// Exit codes per SPEC §8.
-enum ExitCode {
-    static let success: Int32 = 0
-    static let configError: Int32 = 1
-    static let permissionError: Int32 = 2
-    static let partialFailure: Int32 = 3
+/// Writes a message to stderr and exits. Never returns, so callers can use it
+/// in any control-flow position without unwinding through ArgumentParser (which
+/// would collapse every failure onto its own generic exit status).
+func fail(_ message: String, _ code: Int32) -> Never {
+    FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+    Foundation.exit(code)
+}
+
+/// Maps an error to its documented exit code (SPEC §8) and exits.
+func fail(_ error: Error) -> Never {
+    fail(error.localizedDescription, ExitCodes.code(for: error))
 }
 
 struct WorkSync: ParsableCommand {
@@ -41,8 +46,8 @@ func loadConfigOrExit(path: String) -> Config {
     do {
         return try ConfigLoader.load(path: path)
     } catch {
-        FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
-        Foundation.exit(ExitCode.configError)
+        // A missing or unreadable file is a config problem too, not a runtime one.
+        fail(error.localizedDescription, ExitCodes.configError)
     }
 }
 
@@ -51,8 +56,7 @@ func requestAccessOrExit(_ store: CalendarStore) {
     do {
         try store.requestAccess()
     } catch {
-        FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
-        Foundation.exit(ExitCode.permissionError)
+        fail(error)
     }
 }
 
@@ -64,7 +68,7 @@ struct Menubar: ParsableCommand {
     )
     func run() throws {
         print("worksync menubar is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCode.configError)
+        throw ArgumentParser.ExitCode(ExitCodes.configError)
     }
 }
 
@@ -74,7 +78,7 @@ struct Status: ParsableCommand {
     )
     func run() throws {
         print("worksync status is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCode.configError)
+        throw ArgumentParser.ExitCode(ExitCodes.configError)
     }
 }
 
@@ -86,7 +90,7 @@ struct Purge: ParsableCommand {
     @Flag(name: .long, help: "Actually delete (default: count only)") var yes = false
     func run() throws {
         print("worksync purge is not implemented yet (milestone M2).")
-        throw ArgumentParser.ExitCode(ExitCode.configError)
+        throw ArgumentParser.ExitCode(ExitCodes.configError)
     }
 }
 
@@ -98,7 +102,7 @@ struct InstallAgent: ParsableCommand {
     @Flag(name: .long, help: "Install a headless launchd agent instead of the login item") var headless = false
     func run() throws {
         print("worksync install-agent is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCode.configError)
+        throw ArgumentParser.ExitCode(ExitCodes.configError)
     }
 }
 
@@ -109,6 +113,6 @@ struct UninstallAgent: ParsableCommand {
     )
     func run() throws {
         print("worksync uninstall-agent is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCode.configError)
+        throw ArgumentParser.ExitCode(ExitCodes.configError)
     }
 }

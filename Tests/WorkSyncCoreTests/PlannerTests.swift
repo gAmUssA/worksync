@@ -164,6 +164,41 @@ final class PlannerTests: XCTestCase {
         XCTAssertEqual(Set(blocks.map(\.marker.key)).count, 3, "each occurrence gets a distinct key")
     }
 
+    // MARK: Events with no usable identity
+
+    func testUnidentifiableEventsAreSkippedNotCollapsed() {
+        // Two events at the same time with no external identifier would hash to
+        // the same marker key and silently collapse into one entry in
+        // reconcile()'s desired map — dropping a blocker with no trace.
+        let noID = { (start: TimeInterval) in
+            StoredEvent(
+                eventIdentifier: "", externalIdentifier: "",
+                occurrenceDate: self.now.addingTimeInterval(start),
+                calendarId: "source-1", title: "Mystery",
+                start: self.now.addingTimeInterval(start),
+                end: self.now.addingTimeInterval(start + 3600),
+                isAllDay: false, availability: .busy, isDeclinedByUser: false
+            )
+        }
+        let events = [noID(3600), noID(3600)]
+        let blocks = SyncPlanner.desiredBlocks(
+            source: source(), targetCalendar: targetCal, events: events, window: window
+        )
+        XCTAssertTrue(blocks.isEmpty, "unidentifiable events must not produce ambiguous blocks")
+        XCTAssertEqual(SyncPlanner.unidentifiable(events).count, 2, "and the drop must be reportable")
+    }
+
+    func testIdentifiableEventsAreUnaffected() {
+        let events = [event(ext: "HAS-ID", startOffset: 3600, durationMinutes: 60)]
+        XCTAssertTrue(SyncPlanner.unidentifiable(events).isEmpty)
+        XCTAssertEqual(
+            SyncPlanner.desiredBlocks(
+                source: source(), targetCalendar: targetCal, events: events, window: window
+            ).count,
+            1
+        )
+    }
+
     // MARK: Reconciliation diff
 
     private func managedEvent(for block: DesiredBlock, id: String = "evt-1") -> StoredEvent {

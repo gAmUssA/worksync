@@ -89,10 +89,17 @@ public struct Marker: Hashable, Sendable {
     /// must be checked: an event written on one backend may come back with only
     /// one of them intact (SPEC §7).
     public static func extract(url: String?, notes: String?) -> Marker? {
+        // Scan notes bottom-up rather than reading only the final line. The
+        // marker is written last, but users edit notes and some backends append
+        // their own trailing text; on Google CalDAV and Exchange the url field
+        // is dropped entirely (SPEC §7), so failing here would make a managed
+        // event unrecognizable — never updated, never deleted, and duplicated
+        // on the next pass.
         if let notes {
-            let lines = notes.split(separator: "\n", omittingEmptySubsequences: true)
-            if let last = lines.last, let marker = parse(String(last)) {
-                return marker
+            for line in notes.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+                if let marker = parse(String(line)) {
+                    return marker
+                }
             }
         }
         if let url, let marker = parse(url) {

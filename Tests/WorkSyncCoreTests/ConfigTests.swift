@@ -176,6 +176,90 @@ final class ConfigTests: XCTestCase {
         XCTAssertThrowsError(try ConfigLoader.parse(toml))
     }
 
+    // MARK: Source id is marker-facing, so it is normalized and constrained
+
+    private func configTOML(id: String) -> String {
+        """
+        [target]
+        account = "W"
+        calendar = "C"
+        [[source]]
+        id = "\(id)"
+        account = "b"
+        calendar = "c"
+        """
+    }
+
+    func testSourceIDWhitespaceIsTrimmed() throws {
+        // Surrounding whitespace is invisible in the file. Storing it verbatim
+        // would embed it in every marker, and removing it later would orphan
+        // every event written under the padded id.
+        let config = try ConfigLoader.parse(configTOML(id: "  personal  "))
+        XCTAssertEqual(config.sources[0].id, "personal")
+    }
+
+    func testSourceIDWithSlashIsRejected() {
+        // "/" separates the fields of worksync://v1/<id>/<key>; an id containing
+        // it re-parses as a different (sourceID, key) pair than it was written
+        // with, so the event never matches and every pass churns delete+create.
+        XCTAssertThrowsError(try ConfigLoader.parse(configTOML(id: "team/personal"))) { error in
+            guard case .invalidSourceID = error as? ConfigError else {
+                return XCTFail("expected invalidSourceID, got \(error)")
+            }
+        }
+    }
+
+    func testSourceIDWithNewlineIsRejected() {
+        // The marker is one line of the event's notes; a break would split it.
+        XCTAssertThrowsError(try ConfigLoader.parse(configTOML(id: "per\\nsonal"))) { error in
+            guard case .invalidSourceID = error as? ConfigError else {
+                return XCTFail("expected invalidSourceID, got \(error)")
+            }
+        }
+    }
+
+    func testWhitespaceOnlySourceIDIsRejected() {
+        XCTAssertThrowsError(try ConfigLoader.parse(configTOML(id: "   "))) { error in
+            XCTAssertEqual(error as? ConfigError, .emptySourceID)
+        }
+    }
+
+    func testValidateRejectsUnnormalizedIDFromMemory() {
+        // parse() normalizes, but a Config built in memory (the §11.1 editor)
+        // must already carry a marker-safe id.
+        let config = Config(
+            general: GeneralConfig(),
+            target: TargetConfig(account: "W", calendar: "C"),
+            sources: [SourceConfig(id: "personal ", account: "a", calendar: "b")]
+        )
+        XCTAssertThrowsError(try ConfigLoader.validate(config)) { error in
+            guard case .invalidSourceID = error as? ConfigError else {
+                return XCTFail("expected invalidSourceID, got \(error)")
+            }
+        }
+    }
+
+    func testTrimmedIDsStillCollideAsDuplicates() {
+        let toml = """
+        [target]
+        account = "W"
+        calendar = "C"
+        [[source]]
+        id = "personal"
+        account = "a"
+        calendar = "b"
+        [[source]]
+        id = " personal "
+        account = "c"
+        calendar = "d"
+        """
+        XCTAssertThrowsError(try ConfigLoader.parse(toml)) { error in
+            guard case .duplicateSourceID = error as? ConfigError else {
+                return XCTFail("expected duplicateSourceID, got \(error)")
+            }
+        }
+    }
+
     func testGarbageTOMLFails() {
         XCTAssertThrowsError(try ConfigLoader.parse("this is [not toml")) { error in
             guard case .parseFailure = error as? ConfigError else {

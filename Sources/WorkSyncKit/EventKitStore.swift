@@ -95,9 +95,17 @@ public final class EventKitStore: CalendarStore {
             }
         }
 
+        // calendarItemExternalIdentifier and eventIdentifier are both String!
+        // and can come back nil for some backends. Fall back to eventIdentifier
+        // (documented stable across fetches) rather than to "", which would make
+        // every unidentified event at the same time hash to one marker key. An
+        // event with neither is dropped by the planner rather than risking a
+        // collision (SyncPlanner.unidentifiable).
+        let externalID = event.calendarItemExternalIdentifier ?? event.eventIdentifier ?? ""
+
         return StoredEvent(
             eventIdentifier: event.eventIdentifier ?? "",
-            externalIdentifier: event.calendarItemExternalIdentifier ?? "",
+            externalIdentifier: externalID,
             // occurrenceDate is stable across detached-occurrence moves; for
             // non-recurring events EventKit reports the start date.
             occurrenceDate: event.occurrenceDate ?? event.startDate,

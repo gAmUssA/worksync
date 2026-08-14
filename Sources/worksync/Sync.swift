@@ -24,9 +24,13 @@ struct Sync: ParsableCommand {
         let plan: SyncPlan
         do {
             plan = try Self.plan(config: config, store: store, now: Date(), verbose: verbose)
-        } catch let error as ResolutionError {
-            FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
-            throw ArgumentParser.ExitCode(ExitCode.configError)
+        } catch {
+            // Everything the pass can throw maps through the one documented
+            // contract (SPEC §8): resolution problems are config errors, a grant
+            // revoked mid-run is a permission error, and backend failures are
+            // re-runnable partial failures. Letting an error escape to
+            // ArgumentParser instead would collapse all of them onto exit 1.
+            fail(error)
         }
 
         if dryRun {
@@ -36,10 +40,10 @@ struct Sync: ParsableCommand {
         }
 
         // Write path lands in M2 (bean worksync-hw8o).
-        FileHandle.standardError.write(Data(
-            "error: applying changes is not implemented yet (milestone M2); use --dry-run to preview.\n".utf8
-        ))
-        throw ArgumentParser.ExitCode(ExitCode.configError)
+        fail(
+            "applying changes is not implemented yet (milestone M2); use --dry-run to preview.",
+            ExitCodes.configError
+        )
     }
 
     /// The shared read-and-plan pipeline (SPEC §5 steps 1–6, 8-as-diff).
@@ -56,6 +60,15 @@ struct Sync: ParsableCommand {
             let events = try store.events(in: sourceCal, from: window.start, to: window.end)
             if verbose {
                 print("source \(source.id): fetched \(events.count) events from \(sourceCal.title)")
+            }
+            // Never drop these silently: without an identifier they cannot be
+            // reconciled idempotently, so they produce no blocker at all.
+            let unidentifiable = SyncPlanner.unidentifiable(events)
+            if !unidentifiable.isEmpty {
+                FileHandle.standardError.write(Data(
+                    "warning: source \(source.id): skipped \(unidentifiable.count) event(s) with no stable identifier\n"
+                        .utf8
+                ))
             }
             desired += SyncPlanner.desiredBlocks(
                 source: source, targetCalendar: targetCal, events: events, window: window

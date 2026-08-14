@@ -93,6 +93,13 @@ public enum SyncPlanner {
         calendar: Calendar = .current
     ) -> [DesiredBlock] {
         let eligible = events.filter { event in
+            // No usable identity means no stable marker key: two such events
+            // would hash to the same key and silently collapse into one entry
+            // in reconcile()'s desired map, dropping a blocker with no trace.
+            // Skip them instead; callers report the count via unidentifiable(_:).
+            if event.externalIdentifier.isEmpty {
+                return false
+            }
             if event.isDeclinedByUser {
                 return false
             }
@@ -200,6 +207,12 @@ public enum SyncPlanner {
         }
 
         return blocks
+    }
+
+    /// Source events that carry no usable identity and were therefore skipped by
+    /// `desiredBlocks`. Callers surface the count so the drop is never silent.
+    public static func unidentifiable(_ events: [StoredEvent]) -> [StoredEvent] {
+        events.filter(\.externalIdentifier.isEmpty)
     }
 
     /// Reconciliation diff (SPEC §6): desired + existing managed → plan.

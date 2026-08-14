@@ -78,6 +78,7 @@ public enum ConfigError: Error, LocalizedError, Equatable {
     case invalidValue(field: String, value: String, allowed: String)
     case duplicateSourceID(String)
     case emptySourceID
+    case invalidSourceID(id: String, reason: String)
     case noSources
 
     public var errorDescription: String? {
@@ -94,6 +95,8 @@ public enum ConfigError: Error, LocalizedError, Equatable {
             "Duplicate source id \"\(id)\"; source ids must be unique"
         case .emptySourceID:
             "A [[source]] block has an empty id; ids are embedded in event markers and must be non-empty"
+        case let .invalidSourceID(id, reason):
+            "Invalid source id \"\(id)\": \(reason)"
         case .noSources:
             "Config defines no [[source]] blocks; nothing to sync"
         }
@@ -161,9 +164,13 @@ public enum ConfigLoader {
                 guard let s = element.table else {
                     throw ConfigError.parseFailure("[[source]] #\(index + 1) is not a table")
                 }
-                guard let id = s["id"]?.string else {
+                guard let rawID = s["id"]?.string else {
                     throw ConfigError.missingField("source[\(index + 1)].id")
                 }
+                // Normalize before the id reaches a marker: surrounding whitespace
+                // is invisible in the file, and stripping it later would orphan
+                // every event written under the padded id (SPEC §4.1).
+                let id = try normalizedSourceID(rawID)
                 guard let account = s["account"]?.string, !account.isEmpty else {
                     throw ConfigError.missingField("source \"\(id)\".account")
                 }
@@ -215,8 +222,15 @@ public enum ConfigLoader {
 
         var seen = Set<String>()
         for source in config.sources {
-            let id = source.id.trimmingCharacters(in: .whitespaces)
-            guard !id.isEmpty else { throw ConfigError.emptySourceID }
+            // Stricter than parse(), which normalizes: a Config built in memory
+            // (the §11.1 editor, tests) must already carry marker-safe ids.
+            guard source.id == source.id.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                throw ConfigError.invalidSourceID(
+                    id: source.id,
+                    reason: "leading or trailing whitespace; ids are embedded verbatim in event markers"
+                )
+            }
+            let id = try normalizedSourceID(source.id)
             guard seen.insert(id.lowercased()).inserted else {
                 throw ConfigError.duplicateSourceID(source.id)
             }
@@ -231,6 +245,30 @@ public enum ConfigLoader {
             try checkNonNegative(source.paddingBeforeMinutes, "source \"\(source.id)\".padding_before_minutes", min: 0)
             try checkNonNegative(source.paddingAfterMinutes, "source \"\(source.id)\".padding_after_minutes", min: 0)
         }
+    }
+
+    /// Trims a source id and rejects anything that cannot survive a marker
+    /// round trip. A marker is `worksync://v1/<source_id>/<key>` in the url
+    /// field and a single line in notes (SPEC §7), so an id containing "/" or a
+    /// line break re-parses as a different (sourceID, key) pair than it was
+    /// written with — the event then never matches its desired block and every
+    /// pass deletes and recreates it, permanently breaking convergence.
+    static func normalizedSourceID(_ raw: String) throws -> String {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { throw ConfigError.emptySourceID }
+        guard !id.contains("/") else {
+            throw ConfigError.invalidSourceID(
+                id: id,
+                reason: "\"/\" separates the fields of an event marker (worksync://v1/<id>/<key>) and would corrupt every marker written under this id"
+            )
+        }
+        guard id.rangeOfCharacter(from: .controlCharacters.union(.newlines)) == nil else {
+            throw ConfigError.invalidSourceID(
+                id: id,
+                reason: "line breaks and control characters would split the marker line written into event notes"
+            )
+        }
+        return id
     }
 
     private static func checkNonNegative(_ value: Int, _ field: String, min: Int) throws {

@@ -71,6 +71,35 @@ final class MarkerTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(parsed?.isCurrentVersion), "only v1 markers may ever be mutated")
     }
 
+    func testExtractFindsMarkerWhenTextFollowsIt() {
+        // The marker is written last, but users edit notes and some backends
+        // append footers. Reading only the final line would make this event
+        // unrecognizable — and on backends that drop the url field entirely
+        // (Google CalDAV, Exchange) that orphans it and duplicates it next pass.
+        let marker = Marker(sourceID: "personal", key: "abcdefabcdefabcd")
+        let notes = """
+        \(Marker.notesHeaderLine)
+        \(marker.urlString)
+        Sent from my iPhone
+        """
+        XCTAssertEqual(Marker.extract(url: nil, notes: notes), marker)
+    }
+
+    func testExtractPrefersTheLastMarkerWhenSeveralAppear() {
+        let older = Marker(sourceID: "personal", key: "1111111111111111")
+        let newer = Marker(sourceID: "personal", key: "2222222222222222")
+        let notes = "\(older.urlString)\n\(Marker.notesHeaderLine)\n\(newer.urlString)"
+        XCTAssertEqual(Marker.extract(url: nil, notes: notes), newer)
+    }
+
+    func testSlashInSourceIDWouldCorruptRoundTrip() {
+        // Documents why ConfigLoader rejects "/" in a source id: the marker
+        // does not survive its own round trip, which would make reconciliation
+        // churn delete+create forever.
+        let corrupting = Marker(sourceID: "team/personal", key: "abcdefabcdefabcd")
+        XCTAssertNotEqual(Marker.parse(corrupting.urlString), corrupting)
+    }
+
     func testExtractToleratesUserEditedNotes() {
         let marker = Marker(sourceID: "personal", key: "abcdefabcdefabcd")
         let notes = "User wrote a comment here\n\n\(Marker.notesHeaderLine)\n  \(marker.urlString)  "
