@@ -160,6 +160,12 @@ public final class EventKitStore: CalendarStore {
         event.availability = availability(block.availability, supportedBy: event.calendar)
         event.notes = block.marker.notesBlock
         event.url = URL(string: block.marker.urlString)
+        // A blocker is a placeholder, not an appointment: it must never fire an
+        // alert. Cleared on the update path too, so neither a calendar-level
+        // default alert nor one a user added by hand survives on a managed
+        // event. This method fully defines the managed event; leaving any field
+        // unmanaged is what lets state drift across passes.
+        event.alarms = nil
     }
 
     /// Maps configured availability onto EventKit, falling back to the
