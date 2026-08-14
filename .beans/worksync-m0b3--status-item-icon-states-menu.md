@@ -1,11 +1,11 @@
 ---
 # worksync-m0b3
 title: Status item + SwiftUI panel (NSPanel)
-status: todo
+status: in-progress
 type: feature
 priority: normal
 created_at: 2026-08-14T00:35:51Z
-updated_at: 2026-08-14T02:26:08Z
+updated_at: 2026-08-14T03:22:25Z
 parent: worksync-kxg1
 blocked_by:
     - worksync-ccaa

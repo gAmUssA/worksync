@@ -1,11 +1,11 @@
 ---
 # worksync-ccaa
 title: 'menubar lifecycle: explicit delegate in main.swift'
-status: todo
+status: in-progress
 type: task
 priority: normal
 created_at: 2026-08-14T00:35:51Z
-updated_at: 2026-08-14T00:36:15Z
+updated_at: 2026-08-14T03:22:25Z
 parent: worksync-kxg1
 blocked_by:
     - worksync-qn4y

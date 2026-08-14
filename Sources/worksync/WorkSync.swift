@@ -62,16 +62,6 @@ func requestAccessOrExit(_ store: CalendarStore) {
 
 // MARK: - Subcommand stubs (implemented in later milestones)
 
-struct Menubar: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        abstract: "Run as menu bar app (scheduler + status UI). Arrives in M4."
-    )
-    func run() throws {
-        print("worksync menubar is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCodes.configError)
-    }
-}
-
 struct InstallAgent: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "install-agent",
