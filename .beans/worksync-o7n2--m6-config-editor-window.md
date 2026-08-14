@@ -1,11 +1,11 @@
 ---
 # worksync-o7n2
 title: 'M6: Config editor window'
-status: in-progress
+status: completed
 type: milestone
 priority: normal
 created_at: 2026-08-14T00:33:15Z
-updated_at: 2026-08-14T04:30:56Z
+updated_at: 2026-08-14T04:39:43Z
 blocked_by:
     - worksync-5lsv
 ---
@@ -18,3 +18,7 @@ SPEC §14 M6. Config editor window (SPEC §11.1): validate-and-surface on Open c
 - [ ] Reordering sources in Preferences changes their order in config.toml
 - [ ] Renaming an existing source id prompts a warning first (orphaning + purge recovery explained)
 - [ ] Preferences refuses to open on unparseable config, pointing at "Open config"
+
+
+## Summary of Changes
+M6 complete: comment-preserving config writer plus the settings screen that drives it. 184 tests green.
