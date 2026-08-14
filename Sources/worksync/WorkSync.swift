@@ -61,26 +61,3 @@ func requestAccessOrExit(_ store: CalendarStore) {
 }
 
 // MARK: - Subcommand stubs (implemented in later milestones)
-
-struct InstallAgent: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "install-agent",
-        abstract: "Register launch-at-login. Arrives in M4."
-    )
-    @Flag(name: .long, help: "Install a headless launchd agent instead of the login item") var headless = false
-    func run() throws {
-        print("worksync install-agent is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCodes.configError)
-    }
-}
-
-struct UninstallAgent: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "uninstall-agent",
-        abstract: "Unregister launch-at-login. Arrives in M4."
-    )
-    func run() throws {
-        print("worksync uninstall-agent is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCodes.configError)
-    }
-}
