@@ -1,11 +1,11 @@
 ---
 # worksync-4p15
 title: 'M7: Change-driven sync + notifications'
-status: todo
+status: completed
 type: milestone
 priority: normal
 created_at: 2026-08-14T00:33:15Z
-updated_at: 2026-08-14T00:33:43Z
+updated_at: 2026-08-14T17:06:13Z
 blocked_by:
     - worksync-5lsv
 ---

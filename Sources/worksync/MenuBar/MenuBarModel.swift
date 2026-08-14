@@ -86,14 +86,36 @@ final class MenuBarModel {
 
     private let configPath: String
     private let logger: Logger
+    private let notifier: Notifier
+
+    /// Change-driven state. All main-actor confined.
+    private let makeChangeObserver: () -> CalendarChangeObserver
+    private var changeObserver: CalendarChangeObserver?
+    private var changePolicy: ChangeTriggerPolicy?
+    private var changeTimer: Timer?
+    /// When a pass last actually wrote something, for echo suppression.
+    private var lastWriteAt: Date?
 
     static let pausedKey = "io.gamov.worksync.paused"
 
-    init(configPath: String = ConfigLoader.defaultPath) {
+    /// - Parameter notifier: injectable so a test can drive pass outcomes
+    ///   without posting real banners.
+    /// - Parameters:
+    ///   - notifier: injectable so a test can drive pass outcomes without
+    ///     posting real banners.
+    ///   - makeChangeObserver: injectable so the fast path can be driven in a
+    ///     test without a calendar database.
+    init(
+        configPath: String = ConfigLoader.defaultPath,
+        notifier: Notifier? = nil,
+        makeChangeObserver: @escaping () -> CalendarChangeObserver = { EventKitChangeObserver() }
+    ) {
         self.configPath = configPath
+        self.makeChangeObserver = makeChangeObserver
         isPaused = UserDefaults.standard.bool(forKey: Self.pausedKey)
         let level = (try? ConfigLoader.load(path: configPath).general.logLevel) ?? .info
         logger = Logger(level: level)
+        self.notifier = notifier ?? UserNotifier(logger: Logger(level: level))
         lastRun = LastRunStore.load(path: LastRunStore.path(forConfigAt: configPath))
         savedSourceIDs = Set(((try? ConfigLoader.load(path: configPath))?.sources ?? []).map(\.id))
         refreshLoginItemStatus()
@@ -192,6 +214,15 @@ final class MenuBarModel {
         switch outcome.disposition {
         case .completed:
             configError = nil
+            // Stamped before anything else can observe the change, so the
+            // echo window is measured from the write rather than from
+            // whenever this method happens to finish.
+            if outcome.result?.wroteAnything == true {
+                lastWriteAt = .now
+            }
+            // Only now: a successful pass is proof access is granted, which is
+            // what makes starting the observer meaningful (SPEC §11.2).
+            startObservingChangesIfEnabled()
         case .skippedLocked:
             break // not news; the other holder is doing this same work
         case let .failed(message):
@@ -203,11 +234,71 @@ final class MenuBarModel {
         // A pass is when the environment most plausibly changed — access
         // revoked, a calendar renamed, the target made read-only.
         refreshHealth()
+        notify(about: outcome)
 
         if pendingRequest {
             pendingRequest = false
             syncNow()
         }
+    }
+
+    // MARK: Change-driven fast path
+
+    /// Starts observing calendar changes, if the config asks for it.
+    ///
+    /// Called only after a successful pass, so access is known-granted rather
+    /// than assumed — starting earlier would register an observer that can
+    /// never fire and report itself as working (SPEC §11.2).
+    private func startObservingChangesIfEnabled() {
+        guard changeObserver == nil,
+              let config = try? ConfigLoader.load(path: configPath),
+              config.general.changeDriven else { return }
+
+        let policy = ChangeTriggerPolicy(config: config)
+        changePolicy = policy
+        let observer = makeChangeObserver()
+        changeObserver = observer
+        observer.start { [weak self] in
+            // Notifications arrive on an arbitrary queue; everything below
+            // touches main-actor state (SPEC §3.1 rule 4).
+            Task { @MainActor [weak self] in
+                self?.calendarDidChange()
+            }
+        }
+        logger.info("change-driven sync enabled (debounce \(policy.debounceSeconds)s)")
+    }
+
+    private func calendarDidChange() {
+        guard let policy = changePolicy, !isPaused else { return }
+
+        switch policy.action(now: .now, lastWriteAt: lastWriteAt) {
+        case .ignoreEcho:
+            // Our own commit coming back. Without this, every writing pass
+            // schedules exactly one no-op pass behind it, forever.
+            logger.debug("calendar change ignored: own write echo")
+        case let .armTimer(delay):
+            // Re-arms the single timer rather than adding another, so a burst
+            // of notifications for one user edit collapses into one pass.
+            changeTimer?.invalidate()
+            changeTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.logger.debug("change-driven pass firing")
+                    self?.syncNow()
+                }
+            }
+        }
+    }
+
+    /// Notifications are menu bar only (SPEC §4.1): the headless launchd path
+    /// has no session to post into, and `worksync sync` in a terminal already
+    /// prints its summary.
+    private func notify(about outcome: PassOutcome) {
+        // Re-read rather than cached, so switching notify in the settings
+        // screen takes effect on the next pass instead of the next launch —
+        // matching how every other setting behaves.
+        let mode = (try? ConfigLoader.load(path: configPath).general.notify) ?? .off
+        guard let notification = NotificationPolicy.notification(for: outcome, mode: mode) else { return }
+        notifier.post(notification)
     }
 
     private func refreshRunCounts(from outcome: PassOutcome) {

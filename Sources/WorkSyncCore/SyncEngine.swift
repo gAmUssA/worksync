@@ -16,6 +16,17 @@ public struct ApplyResult: Equatable, Sendable {
         !failures.isEmpty
     }
 
+    /// Whether this pass touched the calendar database at all.
+    ///
+    /// Drives echo suppression on the change-driven path (SPEC §11.2): only a
+    /// pass that actually wrote can provoke the notification that would
+    /// otherwise trigger the next one. `unchanged` and `skipped` deliberately
+    /// do not count — treating a read-only pass as a write would suppress the
+    /// user's own genuine edits for the whole echo window.
+    public var wroteAnything: Bool {
+        created > 0 || updated > 0 || deleted > 0
+    }
+
     public init() {}
 
     /// The one summary string shown in the log, the menu bar header, and

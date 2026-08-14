@@ -1,11 +1,11 @@
 ---
 # worksync-8dxh
 title: Change-driven sync (EKEventStoreChanged observer)
-status: todo
+status: completed
 type: feature
 priority: normal
 created_at: 2026-08-14T00:35:51Z
-updated_at: 2026-08-14T00:36:15Z
+updated_at: 2026-08-14T17:06:13Z
 parent: worksync-4p15
 blocked_by:
     - worksync-fkyu

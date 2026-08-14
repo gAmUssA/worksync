@@ -223,6 +223,31 @@ Passes run on a timer (`interval_minutes`), on launch, and on wake from sleep.
 A manual `worksync sync` in a terminal and the menu bar app share a lock, so
 they never collide.
 
+### Reacting to calendar edits
+
+`change_driven = true` adds a fast path: when a source calendar changes, a pass
+runs after `change_debounce_seconds` (default 20) instead of waiting for the
+next tick. The debounce collapses a burst of edits into one pass, and WorkSync
+ignores the echo of its own writes so a syncing pass cannot trigger another.
+
+This is deliberately additive. macOS can defer the notification for a
+background app and delivers nothing at all while the machine is asleep, so the
+timer and the wake-from-sleep pass remain the guarantee — if the notification
+never arrives, syncing quietly carries on at its normal interval.
+
+### Notifications
+
+`notify` controls banners after a pass: `errors` (the default) only when
+something failed, `always` for every pass, `off` for none. A pass skipped
+because another one already held the lock never notifies — nothing happened.
+The banner text is the same summary line the log and the panel show.
+
+Notifications are menu bar only. The headless agent has no session to post
+into, and `worksync sync` in a terminal already prints its summary. WorkSync
+asks for notification permission the first time it actually has something to
+show, not at launch; `worksync doctor` reports the state if you decline and
+later change your mind.
+
 ## Signing
 
 macOS ties calendar permission to a signature's *designated requirement*. An
