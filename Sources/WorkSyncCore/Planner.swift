@@ -332,18 +332,26 @@ public enum SyncPlanner {
     public static func renderTitle(_ template: String, eventStart: Date, calendar: Calendar = .current) -> String {
         var result = template
         if result.contains("{date}") {
-            let formatter = DateFormatter()
-            formatter.calendar = calendar
-            formatter.timeZone = calendar.timeZone
-            formatter.dateFormat = "yyyy-MM-dd"
-            result = result.replacingOccurrences(of: "{date}", with: formatter.string(from: eventStart))
+            // ISO 8601 is Gregorian by definition and has no locale to
+            // inherit, so the `yyyy-MM-dd` this placeholder is documented as
+            // (SPEC §4.1) holds for every user. The previous DateFormatter
+            // took its calendar from the caller's, which defaults to
+            // `.current` — so a Thai user's blockers read "Busy 2569-02-01"
+            // and a Japanese-calendar user's read "Busy 0008-02-01".
+            //
+            // Timezone still follows the user (SPEC §9): which calendar day an
+            // event falls on is genuinely local, unlike which era numbers it.
+            let date = Date.ISO8601FormatStyle(dateSeparator: .dash, timeZone: calendar.timeZone)
+                .year().month().day()
+            result = result.replacing("{date}", with: eventStart.formatted(date))
         }
         if result.contains("{weekday}") {
-            let formatter = DateFormatter()
-            formatter.calendar = calendar
-            formatter.timeZone = calendar.timeZone
-            formatter.dateFormat = "EEEE"
-            result = result.replacingOccurrences(of: "{weekday}", with: formatter.string(from: eventStart))
+            // Deliberately NOT pinned the way {date} is. This is a word the
+            // user reads on their own calendar, so a German user should see
+            // "Montag" — forcing en_US here to match {date} would be a
+            // regression dressed up as consistency.
+            let weekday = Date.FormatStyle(timeZone: calendar.timeZone).weekday(.wide)
+            result = result.replacing("{weekday}", with: eventStart.formatted(weekday))
         }
         return result
     }

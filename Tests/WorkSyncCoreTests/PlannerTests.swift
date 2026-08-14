@@ -142,6 +142,55 @@ final class PlannerTests: XCTestCase {
         XCTAssertEqual(rendered, "Busy 2023-11-14 (Tuesday)")
     }
 
+    /// `{date}` is documented as `yyyy-MM-dd` (SPEC §4.1), and it used to take
+    /// its calendar from the caller's — which defaults to `Calendar.current`.
+    /// A Thai user's blockers therefore read "Busy 2569-11-14" and a
+    /// Japanese-calendar user's "Busy 0005-11-14". The existing test above
+    /// passes an explicitly Gregorian calendar, so it cannot see this.
+    func testDatePlaceholderIsGregorianEvenUnderANonGregorianCalendar() throws {
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertEqual(
+            SyncPlanner.renderTitle("Busy {date}", eventStart: start, calendar: buddhist),
+            "Busy 2023-11-14",
+            "the documented format is not the user's era"
+        )
+    }
+
+    func testDatePlaceholderStillFollowsTheUsersTimeZone() throws {
+        // Which calendar DAY an event falls on is genuinely local (SPEC §9) —
+        // only the era numbering is fixed. 2023-11-14 00:30 UTC is still the
+        // 13th in New York.
+        var newYork = Calendar(identifier: .gregorian)
+        newYork.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let justAfterMidnightUTC = Date(timeIntervalSince1970: 1_699_922_000)
+
+        XCTAssertEqual(
+            SyncPlanner.renderTitle("{date}", eventStart: justAfterMidnightUTC, calendar: newYork),
+            "2023-11-13"
+        )
+    }
+
+    func testWeekdayPlaceholderStaysInTheUsersLanguage() throws {
+        // The counterpart to the rule above: {weekday} is a word the user
+        // reads, so pinning it the way {date} is pinned would be a regression.
+        // Asserted against the current locale's own rendering rather than a
+        // hardcoded "Tuesday", so this passes wherever CI runs.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let expected = try start.formatted(
+            Date.FormatStyle(timeZone: XCTUnwrap(TimeZone(identifier: "UTC"))).weekday(.wide)
+        )
+        XCTAssertEqual(
+            SyncPlanner.renderTitle("{weekday}", eventStart: start, calendar: calendar),
+            expected
+        )
+    }
+
     // MARK: Recurring series regression (SPEC §13)
 
     func testRecurringOccurrencesAllSurvive() {
