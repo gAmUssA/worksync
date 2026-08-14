@@ -5,7 +5,7 @@ status: completed
 type: feature
 priority: normal
 created_at: 2026-08-14T00:35:51Z
-updated_at: 2026-08-14T03:30:45Z
+updated_at: 2026-08-14T03:57:39Z
 parent: worksync-kxg1
 blocked_by:
     - worksync-ccaa
@@ -34,3 +34,7 @@ Prior art: robinebers/openusage (MIT) — attribute if code is copied rather tha
 
 ## Summary of Changes
 Key-capable non-activating NSPanel hosting SwiftUI via NSHostingController; layout before show to avoid the first-frame flash; local+global mouse monitors with the dismissal decision in a pure unit-tested PanelDismissPolicy (sibling menu/popover windows, status-button hit zone reaching screen maxY inclusively). Right-click NSMenu mirrors every action for accessibility. Verified live: status item visible=true.
+
+
+## Post-review fix
+Icon rendering was NOT reactive: renderIcon() ran only from init, user actions, and two one-shot timers at +0.05s/+1.0s after a pass STARTED. A real pass outlives that, so async completion left the icon stuck on 'syncing' until the next timer tick. Now withObservationTracking over the displayed properties, re-armed every fire (onChange is one-shot), single coalescing 50ms debounce. Also added the missing 'Launch at login' control to both the panel overflow and the right-click menu, status read live each time.
