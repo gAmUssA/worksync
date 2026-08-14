@@ -4,23 +4,37 @@ import WorkSyncCore
 /// Every `#available(macOS 26, *)` check in the menu bar lives here, paired
 /// with its back-deployed equivalent, so no view below ever contains an
 /// availability branch (SPEC §11).
+/// `#available` is a RUNTIME check — the symbol still has to exist when the
+/// code is compiled, and `glassEffect` does not exist in the macOS 15 SDK. So
+/// each helper is gated twice: `#if compiler(>=6.2)` decides whether the modern
+/// path is compiled at all (Swift 6.2 ships with the macOS 26 SDK), and
+/// `#available` decides whether it is taken at runtime. Without the outer
+/// guard the project simply does not build on an older toolchain.
 extension View {
     @ViewBuilder
     func barGlass() -> some View {
-        if #available(macOS 26, *) {
-            glassEffect(.regular, in: Rectangle())
-        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                glassEffect(.regular, in: Rectangle())
+            } else {
+                background(.bar)
+            }
+        #else
             background(.bar)
-        }
+        #endif
     }
 
     @ViewBuilder
     func glassButton() -> some View {
-        if #available(macOS 26, *) {
-            buttonStyle(.glass)
-        } else {
+        #if compiler(>=6.2)
+            if #available(macOS 26, *) {
+                buttonStyle(.glass)
+            } else {
+                buttonStyle(.bordered)
+            }
+        #else
             buttonStyle(.bordered)
-        }
+        #endif
     }
 }
 
