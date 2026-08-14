@@ -2,80 +2,82 @@
 
 ## Findings (ordered by severity)
 
-### No blocking defects found in M3 delta
-I did not find functional regressions in the implemented M3 scope (cross-source dedup, conflict check, per-source target routing), and the behavior is strongly covered by tests.
-
-### Residual risk 1 (Medium): No direct CLI-level test for end-to-end `sync` M3 plan reporting
+### 1) High: The menu bar UI does not expose the required “Launch at login” control
 **Why it matters**
-M3 behavior is heavily tested at core level, but there is no command-level test that validates `sync` output semantics (for example, verbose dedup/conflict messages and summary-line skipped counts) in one integrated flow.
+M4 includes the login-item UX, not only the CLI commands. Users cannot enable, inspect, or disable the SMAppService login item from the menu bar panel, so the primary persistent-operation workflow is incomplete.
 
 **Evidence**
-- Core logic is covered: `Tests/WorkSyncCoreTests/MultiSourceTests.swift` and `Tests/WorkSyncCoreTests/SyncEngineTests.swift`
-- No dedicated CLI test target for `Sources/worksync/Sync.swift`
+- M4 requires the panel overflow to include “Launch at login”: [SPEC.md](SPEC.md#L288)
+- The panel overflow only contains Open config, Open log, and Quit: [Sources/worksync/MenuBar/PanelView.swift](Sources/worksync/MenuBar/PanelView.swift#L135-L140)
+- The context menu likewise omits login-item status/actions: [Sources/worksync/MenuBar/StatusItemController.swift](Sources/worksync/MenuBar/StatusItemController.swift#L111-L121)
+- Login-item functionality exists only in the CLI command implementation: [Sources/worksync/LoginItem.swift](Sources/worksync/LoginItem.swift#L39-L69)
 
-**Risk/impact**
-- Low runtime risk, but possible drift between core behavior and CLI observability/output contract.
+**Impact**
+- The documented menu bar workflow cannot configure launch at login.
+- Users must discover and use `worksync install-agent` manually, despite M4 presenting this as a menu-bar setting.
 
 **Recommendation**
-Add a thin command-level test harness (or integration smoke test) for one synthetic multi-source scenario validating:
-1. dedup winner by source order,
-2. conflict skip count,
-3. summary line fields (`created/updated/deleted/skipped/unchanged`).
+Expose the live `SMAppService.mainApp.status` in the panel and add register/unregister actions. Handle `.requiresApproval` by opening Login Items settings, and re-read status whenever the menu/panel is rendered.
 
 ---
 
-### Residual risk 2 (Low): New filter semantics (`max_duration_minutes`, `skip_weekdays`) have no EventKit-backed integration run
+### 2) High: The status icon can remain stuck in the “syncing” state after an async pass completes
 **Why it matters**
-Filter behavior is well unit-tested with deterministic calendars/timezones, but there is no real-store integration check yet.
+The icon is required to reflect idle, syncing, error, and paused state without opening the panel. The async completion path updates `MenuBarModel.state`, but does not trigger a corresponding icon render.
 
 **Evidence**
-- Unit coverage exists: `Tests/WorkSyncCoreTests/FiltersTests.swift`
-- No EventKit-backed automated integration test for weekday boundaries/timezone edges.
+- `finish(_:)` changes `isSyncing` and calls `refreshState()`: [Sources/worksync/MenuBar/MenuBarModel.swift](Sources/worksync/MenuBar/MenuBarModel.swift#L112-L126)
+- `StatusItemController` renders initially and schedules refreshes around timer/action starts, but does not observe model changes: [Sources/worksync/MenuBar/StatusItemController.swift](Sources/worksync/MenuBar/StatusItemController.swift#L35-L44), [Sources/worksync/MenuBar/StatusItemController.swift](Sources/worksync/MenuBar/StatusItemController.swift#L278-L311)
+- The declared observation property is unused and no `withObservationTracking` re-arm is present: [Sources/worksync/MenuBar/StatusItemController.swift](Sources/worksync/MenuBar/StatusItemController.swift#L30-L34)
+- The spec explicitly requires observation-driven re-rendering: [SPEC.md](SPEC.md#L304)
 
-**Risk/impact**
-- Low to medium operational risk around edge timezone/week-boundary cases in real calendars.
+**Impact**
+- After the first pass starts, the icon can stay on `calendar.badge.clock` indefinitely until another scheduled refresh, button action, or wake event.
+- A completed failure or pause transition may not be visible in the status item promptly.
 
 **Recommendation**
-Add manual checklist cases (or scripted local smoke run) for:
-1. weekend-spanning event that crosses into Monday,
-2. `max_duration_minutes` with large padding,
-3. all-day events under skip-weekday rules.
+Use `withObservationTracking` around the model properties read by `renderIcon()`, re-arm the observation after every change, and retain the existing ~50 ms debounce. At minimum, schedule an icon refresh from `MenuBarModel.finish`, but observation is the contractually correct fix.
 
-## Snapshot (Milestone 3 Delta)
-- Review type: Delta review (M2 -> current M3-ready HEAD)
-- Baseline commit (previous review anchor): `c68fc68301677fa1b136929717309ce92cc8f2ca` (`c68fc68`)
-- Current commit reviewed: `074bbc18a993c3d812bded15291e4f4926381645` (`074bbc1`)
-- M3 landing commits in range:
-  - `8f0ad83` - M3: cross-source dedup, conflict check, per-source target routing
-  - `a0e8b78` - close M3
-  - plus follow-up filter commits included in current HEAD (`5271291`)
-- Working tree at review time: clean
+## Residual Risks
+
+### Medium: M4 UI behavior is not covered by an actual bundle-launched smoke test
+Core and policy tests pass, but the menu bar lifecycle, status-item rendering, Login Items registration, wake behavior, panel dismissal, and async state transitions still require execution from the assembled `WorkSync.app`. The current unit suite cannot prove those AppKit/LaunchServices behaviors.
+
+### Low: Last-run and log paths ignore a custom config path
+`MenuBarModel` and `Status` accept a config path, but read/write last-run data and logs through global default paths. This is acceptable for the default installation, but surprising for `--config` users and worth documenting or fixing before broader CLI use.
+
+## Snapshot (Milestone 4 Delta)
+- Review type: Delta review (M3 -> current M4-ready HEAD)
+- Baseline commit: `074bbc18a993c3d812bded15291e4f4926381645` (`074bbc1`)
+- Current commit reviewed: `7d287e85706f960038006c28bdc587a807b0eafb` (`7d287e8`)
+- Main M4 landing commits:
+  - `090a717` - SDK restamp, log rotation, last-run record, status command
+  - `f778e5e` - menu bar lifecycle, NSPanel, scheduler
+  - `f213ac7` - SMAppService login item and headless launchd alternative
+  - `9ba825f` - close M4
+- Later non-M4 changes included in HEAD: M8 doctor specification work and related planning metadata; not treated as M4 implementation scope.
+- Working tree at review time: contained the existing review-file change and untracked `Sources/worksync/Init.swift` / `config.example.toml`; these were not part of the M4 findings
 - Review date: 2026-08-13
 
-## Scope reviewed
-- `Sync.plan(...)` M3 pipeline steps and ordering
-- cross-source dedup identity and source-order precedence
-- conflict check (80% threshold with union overlap)
-- per-source target routing
-- run lock and purge behavior regressions from M2 follow-up
-- new filter features added after M3 landing (`max_duration_minutes`, `skip_weekdays`)
+## Scope Reviewed
+- menu bar lifecycle and explicit delegate setup
+- status item, panel, context menu, and dismissal behavior
+- scheduler, wake handling, and pending-pass behavior
+- logger rotation and last-run persistence
+- `status`, `install-agent`, and `uninstall-agent`
+- headless launchd plist generation
+- M4 tests and remaining runtime-only validation gaps
 
-## Verification run
+## Verification Run
 - Command: `swift test`
-- Result: **125 tests, 0 failures**
+- Result: **151 tests, 0 failures**
 
-## What changed and looks correct
-- M3 pipeline wiring in CLI sync path:
-  - `Sources/worksync/Sync.swift`
-- Cross-source dedup and conflict filtering core:
-  - `Sources/WorkSyncCore/MultiSource.swift`
-  - `Sources/WorkSyncCore/Planner.swift`
-- New/expanded tests:
-  - `Tests/WorkSyncCoreTests/MultiSourceTests.swift`
-  - `Tests/WorkSyncCoreTests/FiltersTests.swift`
-  - `Tests/WorkSyncCoreTests/PurgeEngineTests.swift`
+## M4 Improvements Confirmed
+- Shared `PassRunner` keeps CLI/menu-bar sync behavior aligned: [Sources/WorkSyncCore/PassRunner.swift](Sources/WorkSyncCore/PassRunner.swift)
+- M4 pipeline diagnostics and last-run state are persisted without becoming reconciliation input: [Sources/WorkSyncCore/SyncPipeline.swift](Sources/WorkSyncCore/SyncPipeline.swift), [Sources/WorkSyncCore/LastRun.swift](Sources/WorkSyncCore/LastRun.swift)
+- Log rotation is bounded and synchronized: [Sources/WorkSyncCore/Logger.swift](Sources/WorkSyncCore/Logger.swift)
+- Lock setup failures are now distinguished from normal contention: [Sources/WorkSyncCore/RunLock.swift](Sources/WorkSyncCore/RunLock.swift)
+- Panel dismissal policy and pipeline behavior have focused tests.
 
 ## Assessment
-M3 is in good shape. The implemented behavior matches milestone intent, key safety invariants remain intact, and coverage improved materially.
-
-No release-blocking bugs found in the M3 delta.
+The M4 core scheduling and persistence work is solid and the test suite is healthy. The milestone is not fully complete from a user-facing perspective until the login-item control is exposed in the menu bar and status-icon rendering is made reactive to async model changes.

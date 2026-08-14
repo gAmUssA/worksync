@@ -24,6 +24,7 @@ struct WorkSync: ParsableCommand {
         abstract: "Mirrors busy time from source calendars onto a work calendar as sanitized blockers.",
         version: worksyncVersion,
         subcommands: [
+            Init.self,
             Sync.self,
             Menubar.self,
             Calendars.self,
