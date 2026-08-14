@@ -123,6 +123,7 @@ final class StatusItemController: NSObject {
 
         menu.addItem(.separator())
         for (title, selector) in [
+            ("Settings…", #selector(openSettings)),
             ("Open Config", #selector(openConfig)),
             ("Open Log", #selector(openLog)),
         ] {
@@ -154,6 +155,11 @@ final class StatusItemController: NSObject {
 
     @objc private func openLog() {
         model.openLog()
+    }
+
+    @objc private func openSettings() {
+        model.openSettings()
+        showPanel()
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -209,6 +215,21 @@ final class StatusItemController: NSObject {
         panel.makeKeyAndOrderFront(nil)
 
         installDismissMonitors()
+    }
+
+    /// Re-fits the panel to its content, keeping the TOP edge pinned so it
+    /// grows downward from the menu bar rather than drifting up off screen.
+    private func resizePanelToFit() {
+        guard let panel, panel.isVisible, let controller = hostingController else { return }
+        controller.view.layoutSubtreeIfNeeded()
+        let size = controller.view.fittingSize
+        guard size.width > 0, size.height > 0, size != panel.frame.size else { return }
+
+        let top = panel.frame.maxY
+        var frame = panel.frame
+        frame.size = size
+        frame.origin.y = top - size.height
+        panel.setFrame(frame, display: true, animate: false)
     }
 
     private func makePanel(content: NSHostingController<PanelView>) -> MenuBarPanel {
@@ -340,12 +361,16 @@ final class StatusItemController: NSObject {
             _ = model.state
             _ = model.lastRun
             _ = model.configError
+            // Screen changes the panel's size, so it has to be observed too or
+            // the settings screen opens clipped to the dashboard's height.
+            _ = model.screen
         } onChange: { [weak self] in
             // onChange fires BEFORE the mutation is visible, so the render has
             // to happen on a later turn of the run loop — which the debounce
             // below provides anyway.
             Task { @MainActor [weak self] in
                 self?.scheduleIconRefresh()
+                self?.resizePanelToFit()
                 self?.observeModel()
             }
         }

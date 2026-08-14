@@ -47,6 +47,17 @@ final class MenuBarModel {
     /// (SPEC §10).
     private(set) var loginItemStatus: SMAppService.Status = .notRegistered
 
+    var screen: PanelScreen = .dashboard
+    var editingConfig: Config?
+    var selectedSourceID: String?
+    private(set) var availableCalendars: [CalendarRef] = []
+    private(set) var settingsBlocked: String?
+    var saveError: String?
+    var pendingRename: PendingRename?
+    /// Ids that exist in the saved file, so a rename of a brand-new source
+    /// does not warn about orphaning events that cannot exist yet.
+    var savedSourceIDs: Set<String> = []
+
     var isPaused: Bool {
         didSet {
             UserDefaults.standard.set(isPaused, forKey: Self.pausedKey)
@@ -70,6 +81,7 @@ final class MenuBarModel {
         let level = (try? ConfigLoader.load(path: configPath).general.logLevel) ?? .info
         logger = Logger(level: level)
         lastRun = LastRunStore.load(path: LastRunStore.path(forConfigAt: configPath))
+        savedSourceIDs = Set(((try? ConfigLoader.load(path: configPath))?.sources ?? []).map(\.id))
         refreshLoginItemStatus()
         refreshState()
     }
@@ -216,4 +228,165 @@ final class MenuBarModel {
         let path = (Logger.defaultDirectory as NSString).appendingPathComponent("worksync.log")
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
+}
+
+// MARK: - Settings screen
+
+enum PanelScreen: Equatable {
+    case dashboard
+    case settings
+}
+
+extension MenuBarModel {
+    /// Opens the settings screen with a working copy of the config.
+    ///
+    /// Refuses when the file does not parse: presenting a form full of
+    /// defaults would let a save overwrite a broken-but-recoverable file with
+    /// something quite different from what the user wrote (SPEC §11.1).
+    func openSettings() {
+        do {
+            editingConfig = try ConfigLoader.load(path: configPath)
+            configError = nil
+        } catch {
+            editingConfig = nil
+            configError = error.localizedDescription
+            settingsBlocked = "config.toml does not parse, so settings cannot be edited safely.\n\n"
+                + error.localizedDescription
+                + "\n\nUse “Open config” to fix it by hand."
+            return
+        }
+        settingsBlocked = nil
+        loadCalendarChoices()
+        selectedSourceID = editingConfig?.sources.first?.id
+        screen = .settings
+    }
+
+    func closeSettings() {
+        screen = .dashboard
+        editingConfig = nil
+        pendingRename = nil
+    }
+
+    /// Account/calendar choices for the popups, from the same enumeration
+    /// `worksync calendars` uses. A popup cannot be typed wrong, and a free-text
+    /// typo here hard-errors the whole sync (SPEC §11.1).
+    private func loadCalendarChoices() {
+        Task { [weak self] in
+            let calendars = await Task.detached { () -> [CalendarRef] in
+                let store = EventKitStore()
+                guard (try? store.requestAccess()) != nil else { return [] }
+                return (try? store.calendars()) ?? []
+            }.value
+            self?.availableCalendars = calendars
+        }
+    }
+
+    var accountChoices: [String] {
+        var seen = Set<String>()
+        return availableCalendars.map(\.accountTitle).filter { seen.insert($0).inserted }.sorted()
+    }
+
+    func calendarChoices(inAccount account: String) -> [String] {
+        availableCalendars
+            .filter { $0.accountTitle.caseInsensitiveCompare(account) == .orderedSame }
+            .map(\.title)
+            .sorted()
+    }
+
+    func writableCalendarChoices(inAccount account: String) -> [String] {
+        availableCalendars
+            .filter { $0.accountTitle.caseInsensitiveCompare(account) == .orderedSame && $0.allowsModifications }
+            .map(\.title)
+            .sorted()
+    }
+
+    // MARK: Source list
+
+    func addSource() {
+        guard var config = editingConfig else { return }
+        let base = "source"
+        var name = base
+        var counter = 2
+        while config.sources.contains(where: { $0.id == name }) {
+            name = "\(base)-\(counter)"
+            counter += 1
+        }
+        let account = accountChoices.first ?? ""
+        let calendar = calendarChoices(inAccount: account).first ?? ""
+        config.sources.append(SourceConfig(id: name, account: account, calendar: calendar))
+        editingConfig = config
+        selectedSourceID = name
+    }
+
+    func removeSelectedSource() {
+        guard var config = editingConfig, let selected = selectedSourceID else { return }
+        guard let index = config.sources.firstIndex(where: { $0.id == selected }) else { return }
+        config.sources.remove(at: index)
+        editingConfig = config
+        selectedSourceID = config.sources.first?.id
+    }
+
+    func moveSources(from offsets: IndexSet, to destination: Int) {
+        guard var config = editingConfig else { return }
+        config.sources.move(fromOffsets: offsets, toOffset: destination)
+        editingConfig = config
+    }
+
+    /// Renaming an id orphans every event already written under the old one, so
+    /// it is confirmed rather than applied silently (SPEC §4.1). New sources are
+    /// exempt: nothing exists under them yet.
+    func requestRename(of sourceID: String, to newID: String) {
+        guard let config = editingConfig,
+              let index = config.sources.firstIndex(where: { $0.id == sourceID }) else { return }
+        guard SourceRenamePolicy.needsWarning(
+            renaming: sourceID, to: newID, savedSourceIDs: savedSourceIDs
+        ) else {
+            applyRename(at: index, to: newID)
+            return
+        }
+        pendingRename = PendingRename(index: index, from: sourceID, to: newID)
+    }
+
+    func confirmPendingRename() {
+        guard let rename = pendingRename else { return }
+        applyRename(at: rename.index, to: rename.to)
+        pendingRename = nil
+    }
+
+    func cancelPendingRename() {
+        pendingRename = nil
+    }
+
+    private func applyRename(at index: Int, to newID: String) {
+        guard var config = editingConfig, config.sources.indices.contains(index) else { return }
+        config.sources[index].id = newID
+        editingConfig = config
+        selectedSourceID = newID
+    }
+
+    // MARK: Saving
+
+    /// Writes through the same writer everything else uses — comment
+    /// preserving, self-checked, backed up. Never a UI-only write path.
+    func saveSettings() {
+        guard let config = editingConfig else { return }
+        do {
+            try ConfigWriter.save(config, to: configPath)
+            saveError = nil
+            savedSourceIDs = Set(config.sources.map(\.id))
+            configError = nil
+            // Config is re-read at the start of every pass, so the change takes
+            // effect on the next sync with no restart.
+            closeSettings()
+        } catch {
+            saveError = error.localizedDescription
+        }
+        refreshState()
+    }
+}
+
+struct PendingRename: Equatable {
+    let index: Int
+    let from: String
+    let to: String
 }

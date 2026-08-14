@@ -51,6 +51,21 @@ struct PanelView: View {
     @Bindable var model: MenuBarModel
 
     var body: some View {
+        Group {
+            if model.screen == .settings {
+                SettingsView(model: model)
+            } else {
+                dashboard
+            }
+        }
+        // A pure offset, never a .transition carrying .opacity: compositing
+        // into a transparency layer leaves .quaternary material with no vibrant
+        // backdrop to sample, so it resolves to its opaque near-white base and
+        // flashes white across the cards (SPEC §11).
+        .animation(.spring(response: 0.32, dampingFraction: 0.85), value: model.screen)
+    }
+
+    private var dashboard: some View {
         VStack(spacing: 0) {
             header
             Divider()
@@ -142,6 +157,7 @@ struct PanelView: View {
                     Text("Needs approval in System Settings")
                 }
                 Divider()
+                Button("Settings…") { model.openSettings() }
                 Button("Open config") { model.openConfig() }
                 Button("Open log") { model.openLog() }
                 Divider()
