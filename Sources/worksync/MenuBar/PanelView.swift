@@ -39,6 +39,19 @@ extension View {
     }
 }
 
+extension View {
+    /// The panel's own ground.
+    ///
+    /// The NSPanel is deliberately transparent so its rounded corners are not
+    /// drawn over, which means the SwiftUI content is the only thing painting a
+    /// background. Without this the panel is literally see-through to the
+    /// desktop, and the cards — which are designed to sit on a window
+    /// background — have nothing to sit on.
+    func panelBackground() -> some View {
+        background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
 /// Design tokens, kept in one place so the panel reads as one surface.
 enum Theme {
     static let width: CGFloat = 320
@@ -74,6 +87,7 @@ struct PanelView: View {
             footer
         }
         .frame(width: Theme.width)
+        .panelBackground()
     }
 
     private var header: some View {

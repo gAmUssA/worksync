@@ -35,6 +35,7 @@ struct SettingsView: View {
         // and resizing only happens on a screen change. SPEC §11.1 allows this
         // simplified version of the auto-fitting panel.
         .frame(width: Theme.width, height: 560)
+        .panelBackground()
         .alert(
             "Rename this source?",
             isPresented: Binding(

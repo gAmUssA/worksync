@@ -31,6 +31,7 @@ final class StatusItemController: NSObject {
     private var localMonitor: Any?
     private var globalMonitor: Any?
     private var iconRefreshTimer: Timer?
+    private var appearanceObservation: NSKeyValueObservation?
 
     init(model: MenuBarModel) {
         self.model = model
@@ -41,6 +42,7 @@ final class StatusItemController: NSObject {
         observeModel()
         startScheduler()
         observeWake()
+        observeAppearance()
         renderIcon()
     }
 
@@ -244,6 +246,11 @@ final class StatusItemController: NSObject {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        // Pin the appearance to the system's rather than leaving it unset.
+        // An unset panel appearance resolves to Aqua, so in Dark Mode the
+        // content renders light-mode colours — dark text and white cards — on
+        // a dark backdrop, which is illegible (SPEC §11).
+        panel.appearance = NSApp.effectiveAppearance
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView?.wantsLayer = true
@@ -336,6 +343,16 @@ final class StatusItemController: NSObject {
         // A pass on launch, so the first window after login is covered.
         model.syncNow()
         scheduleIconRefresh()
+    }
+
+    /// Follows system Light/Dark switches. The panel's appearance is pinned, so
+    /// without this it would keep whatever the theme was when it was created.
+    private func observeAppearance() {
+        appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] app, _ in
+            Task { @MainActor [weak self] in
+                self?.panel?.appearance = app.effectiveAppearance
+            }
+        }
     }
 
     private func observeWake() {
