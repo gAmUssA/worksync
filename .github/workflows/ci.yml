@@ -5,6 +5,7 @@ on:
     branches: ["main"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-test:
@@ -53,3 +54,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: build/WorkSync-*.tar.gz
+
+  # Temporary probe: does a macOS 26 runner exist, and what SDK does it carry?
+  # The release job's SDK decides whether shipped builds get modern controls.
+  probe-sdk:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    steps:
+      - run: |
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
