@@ -22,7 +22,13 @@ public enum ExitCodes {
             switch storeError {
             case .accessDenied, .accessRestricted:
                 permissionError
-            case .backendError:
+            case .calendarNotWritable:
+                // Discovered at write time, but the fix is in config.toml:
+                // point the source at a writable target calendar.
+                configError
+            case .backendError, .eventNotFound, .refusedUnmarkedDelete:
+                // All re-runnable: a racing change, a transient backend
+                // failure, or a refused delete that left the calendar intact.
                 partialFailure
             }
         default:

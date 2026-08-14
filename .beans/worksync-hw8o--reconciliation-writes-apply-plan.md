@@ -1,11 +1,11 @@
 ---
 # worksync-hw8o
 title: Reconciliation writes (apply plan)
-status: todo
+status: in-progress
 type: feature
 priority: normal
 created_at: 2026-08-14T00:35:02Z
-updated_at: 2026-08-14T00:36:15Z
+updated_at: 2026-08-14T02:28:51Z
 parent: worksync-ud6v
 blocked_by:
     - worksync-h8ng

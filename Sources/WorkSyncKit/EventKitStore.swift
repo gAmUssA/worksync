@@ -78,6 +78,111 @@ public final class EventKitStore: CalendarStore {
         return results
     }
 
+    // MARK: Writes
+
+    public func create(_ block: DesiredBlock) throws {
+        guard let calendar = store.calendar(withIdentifier: block.calendarId) else {
+            throw CalendarStoreError.backendError("target calendar \(block.calendarId) not found")
+        }
+        guard calendar.allowsContentModifications else {
+            throw CalendarStoreError.calendarNotWritable(calendar.title)
+        }
+        let event = EKEvent(eventStore: store)
+        event.calendar = calendar
+        Self.write(block, onto: event)
+        do {
+            // commit: false — the pass flushes once at the end (SPEC §9).
+            try store.save(event, span: .thisEvent, commit: false)
+        } catch {
+            throw CalendarStoreError.backendError(String(describing: error))
+        }
+    }
+
+    public func update(eventIdentifier: String, to block: DesiredBlock) throws {
+        guard let event = store.event(withIdentifier: eventIdentifier) else {
+            throw CalendarStoreError.eventNotFound(eventIdentifier)
+        }
+        // Managed blockers are always plain non-recurring events, so
+        // event(withIdentifier:) returning "the first occurrence" of a series
+        // is not a hazard here — but never point this at a source event.
+        if event.calendar.calendarIdentifier != block.calendarId {
+            guard let destination = store.calendar(withIdentifier: block.calendarId) else {
+                throw CalendarStoreError.backendError("target calendar \(block.calendarId) not found")
+            }
+            guard destination.allowsContentModifications else {
+                throw CalendarStoreError.calendarNotWritable(destination.title)
+            }
+            event.calendar = destination
+        }
+        Self.write(block, onto: event)
+        do {
+            try store.save(event, span: .thisEvent, commit: false)
+        } catch {
+            throw CalendarStoreError.backendError(String(describing: error))
+        }
+    }
+
+    public func delete(eventIdentifier: String) throws {
+        guard let event = store.event(withIdentifier: eventIdentifier) else {
+            throw CalendarStoreError.eventNotFound(eventIdentifier)
+        }
+        // Last line of defense on an irreversible write against a real
+        // calendar: re-read the marker and refuse if it is not ours. Costs one
+        // already-cached lookup and makes a planning bug non-destructive.
+        guard let marker = Marker.extract(url: event.url?.absoluteString, notes: event.notes),
+              marker.isCurrentVersion
+        else {
+            throw CalendarStoreError.refusedUnmarkedDelete(eventIdentifier)
+        }
+        do {
+            try store.remove(event, span: .thisEvent, commit: false)
+        } catch {
+            throw CalendarStoreError.backendError(String(describing: error))
+        }
+    }
+
+    public func commit() throws {
+        do {
+            try store.commit()
+        } catch {
+            throw CalendarStoreError.backendError(String(describing: error))
+        }
+    }
+
+    /// Applies a desired block onto an EKEvent, writing the marker to BOTH
+    /// locations: notes (primary — Google CalDAV and Exchange drop the url
+    /// field entirely) and url (supplementary, survives on iCloud). SPEC §7.
+    static func write(_ block: DesiredBlock, onto event: EKEvent) {
+        event.title = block.title
+        event.startDate = block.interval.start
+        event.endDate = block.interval.end
+        event.isAllDay = block.isAllDay
+        event.availability = availability(block.availability, supportedBy: event.calendar)
+        event.notes = block.marker.notesBlock
+        event.url = URL(string: block.marker.urlString)
+    }
+
+    /// Maps configured availability onto EventKit, falling back to the
+    /// calendar's default when the backend does not support the value —
+    /// setting an unsupported availability is silently dropped, which would
+    /// otherwise make every pass see a difference and re-update forever.
+    static func availability(_ availability: Availability, supportedBy calendar: EKCalendar?) -> EKEventAvailability {
+        let desired: EKEventAvailability = switch availability {
+        case .busy: .busy
+        case .free: .free
+        case .tentative: .tentative
+        }
+        guard let calendar else { return desired }
+        let supported = calendar.supportedEventAvailabilities
+        let mask: EKCalendarEventAvailabilityMask = switch desired {
+        case .free: .free
+        case .tentative: .tentative
+        case .unavailable: .unavailable
+        default: .busy
+        }
+        return supported.contains(mask) ? desired : .notSupported
+    }
+
     static func map(_ event: EKEvent, calendarId: String) -> StoredEvent {
         let availability: EventAvailability = switch event.availability {
         case .busy: .busy

@@ -79,6 +79,11 @@ public enum CalendarStoreError: Error, LocalizedError {
     case accessDenied
     case accessRestricted
     case backendError(String)
+    case calendarNotWritable(String)
+    case eventNotFound(String)
+    /// A delete was attempted on an event that no longer carries a valid v1
+    /// marker. Never expected in a correct pass; refusing is the point.
+    case refusedUnmarkedDelete(String)
 
     public var errorDescription: String? {
         switch self {
@@ -92,6 +97,12 @@ public enum CalendarStoreError: Error, LocalizedError {
             "Calendar access is restricted by device policy."
         case let .backendError(detail):
             "Calendar store error: \(detail)"
+        case let .calendarNotWritable(title):
+            "Calendar \"\(title)\" is read-only; pick a writable target calendar."
+        case let .eventNotFound(id):
+            "Event \(id) no longer exists (changed underneath the pass); re-run to reconcile."
+        case let .refusedUnmarkedDelete(id):
+            "Refused to delete event \(id): it carries no valid worksync marker. This is a bug — please report it."
         }
     }
 }
@@ -109,4 +120,29 @@ public protocol CalendarStore {
     /// Implementations MUST chunk internally if the span could exceed 4 years:
     /// EKEventStore.predicateForEvents silently truncates wider spans (SPEC §8).
     func events(in calendar: CalendarRef, from: Date, to: Date) throws -> [StoredEvent]
+
+    // MARK: Writes
+
+    //
+    // Writes are staged and then flushed by `commit()` so a pass lands as one
+    // batch (SPEC §9). Implementations MUST write the marker to BOTH locations
+    // on create and update — `marker.notesBlock` into notes and
+    // `marker.urlString` into url — because backends differ in which survives
+    // (SPEC §7).
+
+    /// Creates a managed blocker on the calendar named by `block.calendarId`.
+    func create(_ block: DesiredBlock) throws
+
+    /// Rewrites an existing managed event in place to match `block`, including
+    /// moving it to another calendar when `block.calendarId` differs.
+    func update(eventIdentifier: String, to block: DesiredBlock) throws
+
+    /// Deletes a managed event. Implementations MUST re-verify that the event
+    /// still carries a valid v1 marker and refuse otherwise: this is the last
+    /// line of defense on an irreversible operation against a user's real
+    /// calendar, and it costs one read (SPEC §6).
+    func delete(eventIdentifier: String) throws
+
+    /// Flushes staged writes. Called once at the end of a pass.
+    func commit() throws
 }

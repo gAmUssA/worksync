@@ -82,18 +82,6 @@ struct Status: ParsableCommand {
     }
 }
 
-struct Purge: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        abstract: "Delete ALL managed events (or one source's). Arrives in M2."
-    )
-    @Option(name: .long, help: "Only purge events of this source id") var source: String?
-    @Flag(name: .long, help: "Actually delete (default: count only)") var yes = false
-    func run() throws {
-        print("worksync purge is not implemented yet (milestone M2).")
-        throw ArgumentParser.ExitCode(ExitCodes.configError)
-    }
-}
-
 struct InstallAgent: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "install-agent",

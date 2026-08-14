@@ -21,6 +21,22 @@ struct Sync: ParsableCommand {
         let store = EventKitStore()
         requestAccessOrExit(store)
 
+        // Dry-run reads only, so it never contends for the lock.
+        let lock: RunLock?
+        if dryRun {
+            lock = nil
+        } else {
+            guard let acquired = RunLock() else {
+                // Not an error: another pass is already doing this work (SPEC §9).
+                if verbose {
+                    print("another sync is already running; exiting quietly")
+                }
+                return
+            }
+            lock = acquired
+        }
+        defer { lock?.unlock() }
+
         let plan: SyncPlan
         do {
             plan = try Self.plan(config: config, store: store, now: Date(), verbose: verbose)
@@ -39,11 +55,17 @@ struct Sync: ParsableCommand {
             return
         }
 
-        // Write path lands in M2 (bean worksync-hw8o).
-        fail(
-            "applying changes is not implemented yet (milestone M2); use --dry-run to preview.",
-            ExitCodes.configError
-        )
+        let result = SyncEngine.apply(plan, store: store)
+        print(result.summaryLine)
+
+        if result.hasFailures {
+            for failure in result.failures {
+                FileHandle.standardError.write(Data("error: \(failure)\n".utf8))
+            }
+            // Partial application is safe to re-run: reconciliation is
+            // idempotent, so the next pass finishes whatever did not land.
+            fail("\(result.failures.count) write(s) failed; safe to re-run", ExitCodes.partialFailure)
+        }
     }
 
     /// The shared read-and-plan pipeline (SPEC §5 steps 1–6, 8-as-diff).

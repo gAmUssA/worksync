@@ -1,11 +1,11 @@
 ---
 # worksync-ud6v
 title: 'M2: Reconciliation writes, markers, purge'
-status: todo
+status: in-progress
 type: milestone
 priority: normal
 created_at: 2026-08-14T00:33:15Z
-updated_at: 2026-08-14T00:33:43Z
+updated_at: 2026-08-14T02:28:40Z
 blocked_by:
     - worksync-dopp
 ---
