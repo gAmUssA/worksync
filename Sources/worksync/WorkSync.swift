@@ -3,7 +3,7 @@ import Foundation
 import WorkSyncCore
 import WorkSyncKit
 
-let worksyncVersion = "0.1.0"
+let worksyncVersion = "0.1.1"
 
 /// Writes a message to stderr and exits. Never returns, so callers can use it
 /// in any control-flow position without unwinding through ArgumentParser (which

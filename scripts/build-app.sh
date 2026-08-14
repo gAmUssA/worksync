@@ -119,8 +119,21 @@ if [[ "$MAKE_TAR" -eq 1 ]]; then
   TARBALL="build/${APP_NAME}-${VERSION}-${ARCH}.tar.gz"
   echo "==> packaging ${TARBALL}"
   tar -C build -czf "$TARBALL" "${APP_NAME}.app"
+
+  # A second, version-less copy so a `releases/latest/download/...` URL can be
+  # written down once and keep working. Without it the only published name
+  # contains the version, and any documented download link 404s the moment a
+  # new tag ships.
+  STABLE="build/${APP_NAME}-${ARCH}.tar.gz"
+  cp "$TARBALL" "$STABLE"
+  echo "==> stable alias ${STABLE}"
 fi
 
 echo "==> done: $BUNDLE"
-echo "    Launch the menu bar app via LaunchServices:  open $BUNDLE"
-echo "    CLI use:  $BUNDLE/Contents/MacOS/worksync <command>"
+echo
+echo "Launch the menu bar app:  open $BUNDLE"
+echo
+echo "To use the CLI as \`worksync\`, put it on your PATH:"
+echo "    mkdir -p ~/.local/bin"
+echo "    ln -sf \"$(cd "$(dirname "$BUNDLE")" && pwd)/$(basename "$BUNDLE")/Contents/MacOS/worksync\" ~/.local/bin/worksync"
+echo "    # then ensure ~/.local/bin is on PATH"

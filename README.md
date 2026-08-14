@@ -51,6 +51,31 @@ curl -L -o worksync.tar.gz \
 tar xzf worksync.tar.gz
 ```
 
+Every release publishes two identical tarballs: `WorkSync-arm64.tar.gz`, whose
+name never changes so the `latest` URL above keeps working, and
+`WorkSync-<tag>-arm64.tar.gz` for pinning a specific version.
+
+### Put the CLI on your PATH
+
+The download is an app bundle, so the `worksync` command does not exist until
+you link the executable inside it. Both install paths need this step:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$PWD/WorkSync.app/Contents/MacOS/worksync" ~/.local/bin/worksync
+```
+
+If `~/.local/bin` is not already on your `PATH`, add it:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
+```
+
+`scripts/build-app.sh` prints this command with the right absolute path when it
+finishes. You can skip the link entirely and run
+`WorkSync.app/Contents/MacOS/worksync <command>` instead — every example below
+assumes the link exists.
+
 If you did download through a browser, clear the flag before opening it:
 
 ```bash

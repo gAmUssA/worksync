@@ -70,7 +70,9 @@ jobs:
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/WorkSync-*.tar.gz
+          files: |
+            build/WorkSync-${{ github.ref_name }}-arm64.tar.gz
+            build/WorkSync-arm64.tar.gz
           generate_release_notes: true
           body: |
             Built on macOS 26 so the UI gets modern controls.
