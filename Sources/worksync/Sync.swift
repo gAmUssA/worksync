@@ -76,7 +76,7 @@ struct Sync: ParsableCommand {
             succeeded: !result.hasFailures,
             summary: result.summaryLine,
             errorMessage: result.failures.first
-        ))
+        ), path: LastRunStore.path(forConfigAt: configOption.config))
 
         if result.hasFailures {
             for failure in result.failures {

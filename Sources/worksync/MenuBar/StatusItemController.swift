@@ -30,7 +30,7 @@ final class StatusItemController: NSObject {
     private var timer: Timer?
     private var localMonitor: Any?
     private var globalMonitor: Any?
-    private var observation: NSKeyValueObservation?
+    private var iconRefreshTimer: Timer?
 
     init(model: MenuBarModel) {
         self.model = model
@@ -38,6 +38,7 @@ final class StatusItemController: NSObject {
         super.init()
 
         configureStatusItem()
+        observeModel()
         startScheduler()
         observeWake()
         renderIcon()
@@ -109,6 +110,18 @@ final class StatusItemController: NSObject {
         menu.addItem(pause)
 
         menu.addItem(.separator())
+        // Status is read live every time the menu is built, never cached
+        // across openings (SPEC §10).
+        model.refreshLoginItemStatus()
+        let login = NSMenuItem(
+            title: "Launch at Login (\(model.loginItemDescription))",
+            action: #selector(toggleLaunchAtLogin), keyEquivalent: ""
+        )
+        login.target = self
+        login.state = model.launchesAtLogin ? .on : .off
+        menu.addItem(login)
+
+        menu.addItem(.separator())
         for (title, selector) in [
             ("Open Config", #selector(openConfig)),
             ("Open Log", #selector(openLog)),
@@ -143,6 +156,18 @@ final class StatusItemController: NSObject {
         model.openLog()
     }
 
+    @objc private func toggleLaunchAtLogin() {
+        // Surfaced as an alert rather than swallowed: .requiresApproval needs
+        // the user to do something in System Settings, and silently doing
+        // nothing visible is how people conclude the toggle is broken.
+        if let message = model.toggleLaunchAtLogin() {
+            let alert = NSAlert()
+            alert.messageText = "Launch at login"
+            alert.informativeText = message
+            alert.runModal()
+        }
+    }
+
     // MARK: Panel
 
     private func togglePanel() {
@@ -154,6 +179,10 @@ final class StatusItemController: NSObject {
     }
 
     private func showPanel() {
+        // Never show a remembered value: the user may have changed it in
+        // System Settings since the panel was last open.
+        model.refreshLoginItemStatus()
+
         let controller = hostingController ?? {
             let created = NSHostingController(rootView: PanelView(model: model))
             hostingController = created
@@ -300,14 +329,34 @@ final class StatusItemController: NSObject {
         }
     }
 
-    /// Redraws the icon shortly after state changes. Debounced rather than
-    /// bound to every mutation: a burst of writes during a pass can otherwise
-    /// make the status item visibly flicker or disappear (SPEC §11).
-    private func scheduleIconRefresh() {
-        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.renderIcon() }
+    /// Re-renders the icon whenever anything it displays changes.
+    ///
+    /// `onChange` is ONE-SHOT: without re-arming, the icon updates once and
+    /// then never again. This is the whole mechanism — a pass that finishes
+    /// asynchronously has no other way to reach the status item, so without it
+    /// the icon sticks on "syncing" until the next timer tick.
+    private func observeModel() {
+        withObservationTracking {
+            _ = model.state
+            _ = model.lastRun
+            _ = model.configError
+        } onChange: { [weak self] in
+            // onChange fires BEFORE the mutation is visible, so the render has
+            // to happen on a later turn of the run loop — which the debounce
+            // below provides anyway.
+            Task { @MainActor [weak self] in
+                self?.scheduleIconRefresh()
+                self?.observeModel()
+            }
         }
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+    }
+
+    /// Coalesces bursts into one render. A pass writes several properties in
+    /// quick succession, and re-rendering on each can make the status item
+    /// visibly flicker or briefly disappear.
+    private func scheduleIconRefresh() {
+        iconRefreshTimer?.invalidate()
+        iconRefreshTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.renderIcon() }
         }
     }

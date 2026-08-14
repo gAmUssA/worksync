@@ -34,6 +34,18 @@ public enum LastRunStore {
     public static let defaultPath = NSString(string: "~/.config/worksync/last-run.json")
         .expandingTildeInPath
 
+    /// Last-run state belongs to a config, not to the machine: someone running
+    /// with --config against a second config file should not see the first
+    /// one's history, or overwrite it. Derived as a sibling of the config so
+    /// the pairing is obvious on disk.
+    ///
+    /// The run lock deliberately does NOT follow this rule — it protects the
+    /// calendars, which are shared no matter which config is in play.
+    public static func path(forConfigAt configPath: String) -> String {
+        let directory = (configPath as NSString).deletingLastPathComponent
+        return (directory as NSString).appendingPathComponent("last-run.json")
+    }
+
     public static func load(path: String = defaultPath) -> LastRun? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         return try? JSONDecoder().decode(LastRun.self, from: data)

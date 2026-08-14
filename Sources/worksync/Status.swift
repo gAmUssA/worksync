@@ -15,7 +15,7 @@ struct Status: ParsableCommand {
 
         // Last run first: when something is wrong, "nothing has run in three
         // days" is the answer far more often than any count below (SPEC §11.2).
-        if let lastRun = LastRunStore.load() {
+        if let lastRun = LastRunStore.load(path: LastRunStore.path(forConfigAt: configOption.config)) {
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyy-MM-dd HH:mm"
             let stale = lastRun.isStale(intervalMinutes: config.general.intervalMinutes)

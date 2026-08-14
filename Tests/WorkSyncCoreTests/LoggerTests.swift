@@ -134,3 +134,27 @@ final class LastRunTests: XCTestCase {
         XCTAssertTrue(run.isStale(intervalMinutes: 10, now: now.addingTimeInterval(25 * 60)))
     }
 }
+
+final class LastRunPathTests: XCTestCase {
+    func testPathIsASiblingOfTheConfig() {
+        XCTAssertEqual(
+            LastRunStore.path(forConfigAt: "/etc/worksync/config.toml"),
+            "/etc/worksync/last-run.json"
+        )
+    }
+
+    func testTwoConfigsDoNotShareState() {
+        // Running with --config against a second config must not show the
+        // first one's history, or overwrite it.
+        let a = LastRunStore.path(forConfigAt: "/tmp/a/config.toml")
+        let b = LastRunStore.path(forConfigAt: "/tmp/b/config.toml")
+        XCTAssertNotEqual(a, b)
+    }
+
+    func testDefaultConfigPathYieldsTheDefaultStatePath() {
+        XCTAssertEqual(
+            LastRunStore.path(forConfigAt: ConfigLoader.defaultPath),
+            LastRunStore.defaultPath
+        )
+    }
+}

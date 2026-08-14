@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import ServiceManagement
 import WorkSyncCore
 import WorkSyncKit
 
@@ -40,6 +41,12 @@ final class MenuBarModel {
     private(set) var sourceCounts: [String: Int] = [:]
     private(set) var configError: String?
 
+    /// Refreshed on every panel open and after every toggle, never trusted
+    /// across those boundaries: the user can remove the login item in System
+    /// Settings at any time, and a remembered value would report a lie
+    /// (SPEC §10).
+    private(set) var loginItemStatus: SMAppService.Status = .notRegistered
+
     var isPaused: Bool {
         didSet {
             UserDefaults.standard.set(isPaused, forKey: Self.pausedKey)
@@ -62,8 +69,47 @@ final class MenuBarModel {
         isPaused = UserDefaults.standard.bool(forKey: Self.pausedKey)
         let level = (try? ConfigLoader.load(path: configPath).general.logLevel) ?? .info
         logger = Logger(level: level)
-        lastRun = LastRunStore.load()
+        lastRun = LastRunStore.load(path: LastRunStore.path(forConfigAt: configPath))
+        refreshLoginItemStatus()
         refreshState()
+    }
+
+    // MARK: Launch at login
+
+    func refreshLoginItemStatus() {
+        loginItemStatus = LoginItem.status
+    }
+
+    var loginItemDescription: String {
+        LoginItem.describe(loginItemStatus)
+    }
+
+    var launchesAtLogin: Bool {
+        loginItemStatus == .enabled || loginItemStatus == .requiresApproval
+    }
+
+    /// Returns a message when the user has something to do, nil when the
+    /// toggle simply took effect.
+    @discardableResult
+    func toggleLaunchAtLogin() -> String? {
+        do {
+            if launchesAtLogin {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            refreshLoginItemStatus()
+            return "Could not change launch at login: \(error.localizedDescription)"
+        }
+
+        refreshLoginItemStatus()
+        if loginItemStatus == .requiresApproval {
+            // Normal first-run behavior, not a failure (SPEC §10).
+            SMAppService.openSystemSettingsLoginItems()
+            return "Approve WorkSync in System Settings > General > Login Items."
+        }
+        return nil
     }
 
     var intervalMinutes: Int {
@@ -101,7 +147,8 @@ final class MenuBarModel {
                 PassRunner.run(
                     configPath: configPath,
                     makeStore: { EventKitStore() },
-                    logger: logger
+                    logger: logger,
+                    lastRunPath: LastRunStore.path(forConfigAt: configPath)
                 )
             }.value
 
@@ -111,7 +158,7 @@ final class MenuBarModel {
 
     private func finish(_ outcome: PassOutcome) {
         isSyncing = false
-        lastRun = LastRunStore.load()
+        lastRun = LastRunStore.load(path: LastRunStore.path(forConfigAt: configPath))
 
         switch outcome.disposition {
         case .completed:

@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import WorkSyncCore
 
@@ -133,6 +134,14 @@ struct PanelView: View {
             Spacer()
 
             Menu {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { model.launchesAtLogin },
+                    set: { _ in model.toggleLaunchAtLogin() }
+                ))
+                if model.loginItemStatus == .requiresApproval {
+                    Text("Needs approval in System Settings")
+                }
+                Divider()
                 Button("Open config") { model.openConfig() }
                 Button("Open log") { model.openLog() }
                 Divider()
