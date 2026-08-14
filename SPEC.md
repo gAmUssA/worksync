@@ -384,6 +384,24 @@ Definition of done for CI: green build + tests on a clean runner with zero manua
 5. **M5:** release workflow, build-app.sh signing + designated-requirement verification, docs.
 6. **M6:** settings screen inside the panel (§11.1) — validate-and-surface on Open config, the config writer with backup and round-trip self-check (§4.3), the comment-preserving line editor, the general/target forms, and the source list with add/remove/drag-reorder and the id-rename warning.
 7. **M7:** change-driven sync and desktop notifications (§11.2).
+8. **M8:** `worksync doctor` and health surfacing (§16) — one set of checks in the core, rendered as terminal output by the CLI and as a menu bar indicator by the app. Depends on M4 for the UI half and on nothing for the core half, so it can be pulled ahead of M5–M7 if diagnostics are worth more than release polish.
+
+## 16. Self-diagnosis (`worksync doctor`)
+
+Most of what goes wrong is environmental rather than logical: a permission tier that silently returns zero events, a signature that resets the calendar grant on every update, a login item that was never approved, a process that simply is not running. Each of those cost real debugging time during M1–M4, and each is mechanically detectable — which is the argument for the command.
+
+**The checks live in the core and return a value type** (`severity`, `title`, `detail`, `remediation`), because that single decision buys three things at once: `--json` output, unit tests against the in-memory fake with no TCC grant in CI, and a menu bar indicator that cannot drift from the CLI. Homebrew had to retrofit exactly this shape before its own `--json` was possible; doing it first is free.
+
+**Severity maps onto the existing exit codes (§8); no new codes.** Access failures take precedence and exit 2, because without access every calendar-dependent check is *unknowable* rather than failing — reporting the symptoms first sends the user somewhere useless. Config and resolution problems exit 1, a check that itself blew up exits 3. **Warnings never change the exit code**, with `--strict` as an opt-in for CI. This is deliberate: `brew doctor` exits non-zero on anything at all, including purely cosmetic findings, and the result is a command whose own help text tells users to ignore it.
+
+Two rules keep it worth running:
+
+- **No check without a remediation the user can execute.** A finding whose fix is "file a bug" belongs in a debug dump, not here.
+- **No check that can be wrong on a healthy machine.** One false positive teaches the user to ignore the whole command, and they do not come back to re-evaluate.
+
+**Doctor is provably read-only.** It never prompts (it reads `authorizationStatus` rather than calling the requesting API, which would both show a dialog to someone running a diagnostic *and* let it report success for a permission granted to the diagnostic itself), never reads the TCC database, never runs a sync pass, and never fixes anything. It prints calendar and account titles — needed to diagnose a typo — and never event titles or attendees, because doctor output is exactly what users paste into bug reports.
+
+**The menu bar renders the same findings** (§11): the icon answers "is WorkSync OK?", so doctor errors and a failed last pass share the error treatment, warnings get a distinct non-red treatment, and paused outranks both. Checks are fast and local, so they can run on launch, after each pass, and on panel open without a timer.
 
 ## 15. Acceptance criteria
 
