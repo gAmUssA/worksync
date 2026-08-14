@@ -422,5 +422,8 @@ Two rules keep it worth running:
 - Every menu bar action works on the tenth invocation exactly as on the first — "Sync now" in particular runs a complete pass every time it is clicked.
 - Editing a value in the settings screen and saving updates exactly that value in config.toml, leaves every other line byte-identical, and preserves all comments; a save with no edits leaves the file byte-identical.
 - Reordering sources in the settings screen changes their order in config.toml, and renaming an existing source's id prompts a warning first.
+- `worksync doctor` prints every check with a severity glyph and, for anything not passing, a remediation the user can run or click; it exits 0 on a healthy machine even with warnings present, and `--strict` turns those same warnings into exit 1.
+- `worksync doctor` changes nothing: config.toml, last-run.json, and the log are byte-identical before and after a run, no permission prompt appears, and a running menu bar app is still running afterwards.
+- Revoking calendar access turns the menu bar icon to its error state without the panel being opened, and the panel lists the failing check with a button that opens the right settings pane.
 - `purge` removes every worksync-managed event and nothing else, including events stranded on calendars the current config no longer targets.
 - Tool makes no network connections of its own (verifiable with Little Snitch/nettop).

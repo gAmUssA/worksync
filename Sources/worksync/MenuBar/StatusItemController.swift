@@ -190,6 +190,10 @@ final class StatusItemController: NSObject {
         // Never show a remembered value: the user may have changed it in
         // System Settings since the panel was last open.
         model.refreshLoginItemStatus()
+        // Same reason, and the more important one: calendar access can be
+        // revoked between opens, and that is precisely what the panel is being
+        // opened to find out.
+        model.refreshHealth()
 
         let controller = hostingController ?? {
             let created = NSHostingController(rootView: PanelView(model: model))
@@ -385,6 +389,12 @@ final class StatusItemController: NSObject {
             // Screen changes the panel's size, so it has to be observed too or
             // the settings screen opens clipped to the dashboard's height.
             _ = model.screen
+            // Health adds and removes problem rows, and a warning does not
+            // move `state` — so without this the panel keeps the height it had
+            // before the problem appeared, clipping the row that explains it.
+            _ = model.health
+            _ = model.isCheckingHealth
+            _ = model.saveWarning
         } onChange: { [weak self] in
             // onChange fires BEFORE the mutation is visible, so the render has
             // to happen on a later turn of the run loop — which the debounce

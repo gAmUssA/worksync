@@ -40,6 +40,11 @@ final class MenuBarModel {
     private(set) var lastRun: LastRun?
     private(set) var sourceCounts: [String: Int] = [:]
     private(set) var configError: String?
+    /// The last doctor run, or nil before the first one. Drives the icon as
+    /// well as the panel: a problem the user has not opened the panel to see
+    /// is exactly the one worth showing in the menu bar.
+    private(set) var health: DoctorReport?
+    private(set) var isCheckingHealth = false
 
     /// Refreshed on every panel open and after every toggle, never trusted
     /// across those boundaries: the user can remove the login item in System
@@ -93,6 +98,9 @@ final class MenuBarModel {
         savedSourceIDs = Set(((try? ConfigLoader.load(path: configPath))?.sources ?? []).map(\.id))
         refreshLoginItemStatus()
         refreshState()
+        // At launch, so the icon tells the truth before the panel is ever
+        // opened — the whole point of surfacing health in the menu bar.
+        refreshHealth()
     }
 
     // MARK: Launch at login
@@ -192,6 +200,9 @@ final class MenuBarModel {
 
         refreshRunCounts(from: outcome)
         refreshState()
+        // A pass is when the environment most plausibly changed — access
+        // revoked, a calendar renamed, the target made read-only.
+        refreshHealth()
 
         if pendingRequest {
             pendingRequest = false
@@ -209,13 +220,73 @@ final class MenuBarModel {
             state = .paused
         } else if isSyncing {
             state = .syncing
-        } else if configError != nil || lastRun?.succeeded == false {
+        } else if configError != nil || lastRun?.succeeded == false || health?.worstSeverity == .error {
+            // Health counts, not just the last pass. Revoked calendar access
+            // makes every pass succeed at doing nothing, so a sync-only icon
+            // stays green while the tool is completely broken (SPEC §16) —
+            // the one failure the user most needs to see without opening
+            // anything.
+            //
             // Sticky until a pass succeeds, so a failure at 03:00 is still
             // visible at 09:00 (SPEC §11).
             state = .error
         } else {
             state = .idle
         }
+    }
+
+    // MARK: Health
+
+    /// Runs the same checks `worksync doctor` runs — the CLI computes, the UI
+    /// renders. A second implementation here would drift, and the first time
+    /// the two disagreed the user would trust neither.
+    func refreshHealth() {
+        guard !isCheckingHealth else { return }
+        isCheckingHealth = true
+        Task { [configPath] in
+            // Detached: shelling out to launchctl and codesign, plus the
+            // EventKit calendar listing, must not block the panel.
+            let report = await Task.detached(priority: .userInitiated) {
+                DoctorChecks.run(DoctorFacts.gather(configPath: configPath))
+            }.value
+            self.health = report
+            self.isCheckingHealth = false
+            self.refreshState()
+        }
+    }
+
+    /// Errors first, then warnings — what to fix, in the order to fix it.
+    /// Passing and skipped checks are left out: the panel answers "is anything
+    /// wrong", and `worksync doctor` is where the full list lives.
+    var healthProblems: [DoctorFinding] {
+        guard let health else { return [] }
+        return health.findings
+            .filter { $0.severity == .error || $0.severity == .warning }
+            .sorted { $0.severity > $1.severity }
+    }
+
+    var healthSummary: String {
+        guard let health else { return isCheckingHealth ? "Checking…" : "Not checked yet" }
+        return health.summaryLine
+    }
+
+    /// Sends the user where the fix actually is.
+    func open(_ destination: DoctorDestination) {
+        switch destination {
+        case .configFile:
+            openConfig()
+        case .loginItemSettings:
+            SMAppService.openSystemSettingsLoginItems()
+        case .calendarPrivacySettings:
+            openSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")
+        case .notificationSettings:
+            openSettingsPane("x-apple.systempreferences:com.apple.preference.notifications")
+        }
+    }
+
+    private func openSettingsPane(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: Menu actions

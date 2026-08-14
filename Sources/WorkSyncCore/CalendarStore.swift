@@ -113,6 +113,11 @@ public protocol CalendarStore {
     /// Requests full calendar access. Throws CalendarStoreError on denial.
     func requestAccess() throws
 
+    /// Reports the permission already held. MUST NOT prompt — `doctor` calls
+    /// this, and a diagnostic that raises a permission dialog is both
+    /// startling and self-defeating (SPEC §16).
+    func authorizationStatus() -> CalendarAccess
+
     /// All calendars across all accounts.
     func calendars() throws -> [CalendarRef]
 

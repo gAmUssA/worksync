@@ -1,11 +1,11 @@
 ---
 # worksync-4dgw
 title: Health indicator in the menu bar
-status: todo
+status: completed
 type: epic
 priority: normal
 created_at: 2026-08-14T03:40:03Z
-updated_at: 2026-08-14T03:40:03Z
+updated_at: 2026-08-14T05:18:57Z
 parent: worksync-ikky
 blocked_by:
     - worksync-q43e

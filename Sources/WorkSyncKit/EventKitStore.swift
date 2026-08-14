@@ -12,6 +12,23 @@ public final class EventKitStore: CalendarStore {
 
     public init() {}
 
+    /// Reads the current grant and stops there. Never calls
+    /// `requestFullAccessToEvents`, which is what separates this from
+    /// `requestAccess()` below.
+    public func authorizationStatus() -> CalendarAccess {
+        switch EKEventStore.authorizationStatus(for: .event) {
+        case .fullAccess: .fullAccess
+        case .writeOnly: .writeOnly
+        case .denied: .denied
+        case .restricted: .restricted
+        case .notDetermined: .notDetermined
+        // `.authorized` is the pre-iOS 17 spelling of full access and is
+        // deprecated rather than removed, so it can still come back here.
+        case .authorized: .fullAccess
+        @unknown default: .notDetermined
+        }
+    }
+
     public func requestAccess() throws {
         switch EKEventStore.authorizationStatus(for: .event) {
         case .fullAccess:

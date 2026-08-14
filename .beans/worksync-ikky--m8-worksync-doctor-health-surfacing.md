@@ -1,11 +1,11 @@
 ---
 # worksync-ikky
 title: 'M8: worksync doctor + health surfacing'
-status: todo
+status: completed
 type: milestone
 priority: normal
 created_at: 2026-08-14T03:40:03Z
-updated_at: 2026-08-14T03:40:03Z
+updated_at: 2026-08-14T05:18:57Z
 blocked_by:
     - worksync-5lsv
 ---

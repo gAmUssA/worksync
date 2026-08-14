@@ -29,6 +29,7 @@ struct WorkSync: ParsableCommand {
             Menubar.self,
             Calendars.self,
             Status.self,
+            Doctor.self,
             Purge.self,
             InstallAgent.self,
             UninstallAgent.self,

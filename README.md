@@ -174,6 +174,7 @@ once in Calendar.app.
 | `worksync calendars` | List accounts and calendars with identifiers |
 | `worksync sync [--dry-run]` | Run one pass; `--dry-run` previews without writing |
 | `worksync status` | Last run, staleness, and managed events per source |
+| `worksync doctor [--json]` | Check everything that can quietly break; `--strict` fails on warnings too |
 | `worksync menubar` | Run the menu bar app in the foreground |
 | `worksync purge [--source ID]` | Remove WorkSync's events; needs `--yes` to delete |
 | `worksync install-agent` | Launch at login (`--headless` for no icon) |
@@ -181,6 +182,35 @@ once in Calendar.app.
 
 Exit codes: `0` success, `1` config or validation error, `2` permission error,
 `3` something failed but is safe to re-run.
+
+## When something isn't working
+
+`worksync doctor` is the first stop. It checks the nine things that actually go
+wrong — calendar permission, the config, whether every account and calendar
+still resolves, whether the target is writable, whether anything is running at
+all, plus warnings for a signature that will lose its permission on the next
+update, a stale last run, notification permission, and a log that stopped
+rotating.
+
+```
+✓ Calendar access
+✓ Config
+✗ Accounts and calendars resolve
+    • Calendar "Personl" not found in account "iCloud". Available: Personal, Family.
+    → Run `worksync calendars` for the exact account and calendar titles.
+✓ Target calendars are writable
+...
+9 checks: 1 error.
+```
+
+Every failing check comes with something you can run or click; warnings never
+change the exit code unless you pass `--strict`. The menu bar panel shows the
+same findings with buttons that open the right settings pane — it renders what
+`doctor` computes, so the two can never disagree.
+
+Doctor is strictly read-only: it never prompts for permission, never writes,
+never runs a sync, and prints calendar and account titles only — never event
+titles or attendees — so its output is safe to paste into a bug report.
 
 ## The menu bar app
 

@@ -8,6 +8,10 @@ public final class InMemoryCalendarStore: CalendarStore {
     public private(set) var calendarList: [CalendarRef]
     public private(set) var eventsByCalendar: [String: [StoredEvent]]
     public var accessGranted: Bool
+    /// Drives the doctor's access check through every state, none of which is
+    /// reachable in CI otherwise. Defaults to agreeing with `accessGranted`
+    /// so existing tests keep the behavior they were written against.
+    public var access: CalendarAccess?
 
     /// Set to fail the next write of a given kind, to exercise partial-failure
     /// handling without needing a misbehaving backend.
@@ -37,6 +41,10 @@ public final class InMemoryCalendarStore: CalendarStore {
 
     public func requestAccess() throws {
         guard accessGranted else { throw CalendarStoreError.accessDenied }
+    }
+
+    public func authorizationStatus() -> CalendarAccess {
+        access ?? (accessGranted ? .fullAccess : .denied)
     }
 
     public func calendars() throws -> [CalendarRef] {

@@ -1,10 +1,11 @@
 ---
 # worksync-vxlt
 title: 'doctor: non-prompting authorizationStatus on CalendarStore'
-status: todo
+status: completed
 type: task
+priority: normal
 created_at: 2026-08-14T03:37:43Z
-updated_at: 2026-08-14T03:37:43Z
+updated_at: 2026-08-14T05:18:57Z
 parent: worksync-q43e
 ---
 

@@ -34,31 +34,84 @@ public struct ResolvedCalendars: Sendable {
     }
 }
 
+/// Everything resolution could and could not work out, rather than the first
+/// thing that went wrong.
+public struct ResolutionReport: Sendable {
+    /// The entries that did resolve. Partial when `problems` is non-empty.
+    public let resolved: ResolvedCalendars
+    /// In config order, so the list reads like the file the user is about to
+    /// edit.
+    public let problems: [ResolutionError]
+
+    public var isComplete: Bool {
+        problems.isEmpty
+    }
+}
+
 public enum Resolver {
     /// Resolves every source and target calendar, case-insensitively, and enforces
     /// the ambiguity and source==target guards (SPEC §4.1, §9).
+    ///
+    /// Throws on the first problem, which is right for a sync pass: there is
+    /// no useful work to do once anything is unresolvable. `doctor` wants the
+    /// whole list instead — see `resolveAll`.
     public static func resolve(config: Config, calendars: [CalendarRef]) throws -> ResolvedCalendars {
+        let report = resolveAll(config: config, calendars: calendars)
+        if let first = report.problems.first {
+            throw first
+        }
+        return report.resolved
+    }
+
+    /// Resolves everything it can and collects every problem it hits.
+    ///
+    /// Reporting only the first failure means a config with three typos takes
+    /// three edit-and-re-run cycles to fix, each revealing one more — which is
+    /// a papercut for `sync` and the wrong shape entirely for a diagnostic.
+    public static func resolveAll(config: Config, calendars: [CalendarRef]) -> ResolutionReport {
         var sourceCals: [String: CalendarRef] = [:]
         var targetCals: [String: CalendarRef] = [:]
+        var problems: [ResolutionError] = []
 
         for source in config.sources {
-            sourceCals[source.id] = try find(account: source.account, calendar: source.calendar, in: calendars)
+            do {
+                sourceCals[source.id] = try find(
+                    account: source.account, calendar: source.calendar, in: calendars
+                )
+            } catch let error as ResolutionError {
+                problems.append(error)
+            } catch {}
+
             let targetTitle = source.targetCalendar.isEmpty ? config.target.calendar : source.targetCalendar
-            targetCals[source.id] = try find(account: config.target.account, calendar: targetTitle, in: calendars)
+            do {
+                targetCals[source.id] = try find(
+                    account: config.target.account, calendar: targetTitle, in: calendars
+                )
+            } catch let error as ResolutionError {
+                // Sources commonly share one target, so the same miss would
+                // otherwise be reported once per source.
+                if !problems.contains(error) {
+                    problems.append(error)
+                }
+            } catch {}
         }
 
+        // Only over what resolved: a feedback loop cannot be judged from a
+        // calendar that was never found.
         for source in config.sources {
-            if let src = sourceCals[source.id], let dst = targetCals[source.id], src.id == dst.id {
-                throw ResolutionError.sourceIsTarget(sourceID: source.id, calendar: dst.title)
-            }
-            // A source must also not collide with ANY target calendar.
-            if let src = sourceCals[source.id],
-               targetCals.values.contains(where: { $0.id == src.id }) {
-                throw ResolutionError.sourceIsTarget(sourceID: source.id, calendar: src.title)
+            guard let src = sourceCals[source.id] else { continue }
+            if let dst = targetCals[source.id], src.id == dst.id {
+                problems.append(.sourceIsTarget(sourceID: source.id, calendar: dst.title))
+            } else if targetCals.values.contains(where: { $0.id == src.id }) {
+                // A source must also not collide with ANY target calendar.
+                problems.append(.sourceIsTarget(sourceID: source.id, calendar: src.title))
             }
         }
 
-        return ResolvedCalendars(sourceCalendars: sourceCals, targetCalendars: targetCals)
+        return ResolutionReport(
+            resolved: ResolvedCalendars(sourceCalendars: sourceCals, targetCalendars: targetCals),
+            problems: problems
+        )
     }
 
     private static func find(account: String, calendar: String, in calendars: [CalendarRef]) throws -> CalendarRef {

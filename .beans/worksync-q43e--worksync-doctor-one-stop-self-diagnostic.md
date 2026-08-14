@@ -1,11 +1,11 @@
 ---
 # worksync-q43e
 title: worksync doctor — one-stop self diagnostic
-status: todo
+status: completed
 type: epic
 priority: normal
 created_at: 2026-08-14T03:10:50Z
-updated_at: 2026-08-14T03:40:03Z
+updated_at: 2026-08-14T05:18:57Z
 parent: worksync-ikky
 ---
 

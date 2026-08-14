@@ -88,12 +88,105 @@ struct PanelView: View {
                 saveWarningBanner(warning)
             }
             Divider()
+            healthSection
+            Divider()
             content
             Divider()
             footer
         }
         .frame(width: Theme.width)
         .panelBackground()
+    }
+
+    /// The green/red answer to "is anything wrong", with the failing checks
+    /// and their fixes underneath.
+    ///
+    /// Rendered from the same `DoctorReport` the CLI prints — the CLI computes,
+    /// this displays — so the two can never disagree about what healthy means.
+    private var healthSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: healthSymbol)
+                    .foregroundStyle(healthTint)
+                Text("Health").font(.subheadline).bold()
+                Spacer()
+                if model.isCheckingHealth {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        model.refreshHealth()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Re-check health")
+                }
+            }
+
+            Text(model.healthSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(model.healthProblems, id: \.id) { problem in
+                problemRow(problem)
+            }
+        }
+        .padding(Theme.padding)
+    }
+
+    private func problemRow(_ problem: DoctorFinding) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(problem.severity.glyph)
+                    .foregroundStyle(problem.severity == .error ? .red : .orange)
+                Text(problem.title).font(.callout)
+            }
+            ForEach(problem.detail, id: \.self) { line in
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let destination = DoctorDestination.forFinding(id: problem.id) {
+                Button(destination.buttonTitle) { model.open(destination) }
+                    .controlSize(.small)
+            } else if let remediation = problem.remediation {
+                // No destination to send them to, so show the command rather
+                // than a button that cannot do anything.
+                Text(remediation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .fill(Color(nsColor: .textBackgroundColor))
+                .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(.quaternary))
+        )
+    }
+
+    private var healthSymbol: String {
+        switch model.health?.worstSeverity {
+        case .error: "xmark.circle.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .ok, .skipped: "checkmark.circle.fill"
+        // Never green before the first run: an unknown state shown as healthy
+        // is the failure this section exists to prevent.
+        case nil: "questionmark.circle"
+        }
+    }
+
+    private var healthTint: Color {
+        switch model.health?.worstSeverity {
+        case .error: .red
+        case .warning: .orange
+        case .ok, .skipped: .green
+        case nil: .secondary
+        }
     }
 
     private func saveWarningBanner(_ warning: String) -> some View {
