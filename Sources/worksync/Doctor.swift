@@ -84,7 +84,7 @@ enum DoctorFacts {
         return SchedulingFacts(
             loginItemEnabled: status == .enabled,
             launchAgentLoaded: launchAgentLoaded(),
-            menubarRunning: menubarRunning(),
+            menubar: menubarProbe(),
             // requiresApproval is the trap here: registration succeeded, so
             // every other signal looks like success, and nothing ever runs.
             loginItemDetail: status == .enabled ? nil : "login item: \(LoginItem.describe(status))"
@@ -101,18 +101,19 @@ enum DoctorFacts {
     /// A menu bar app holds the instance lock for its whole life, so failing
     /// to take it means one is running. Cheaper and more accurate than
     /// scanning the process list, which also matches this very command.
-    private static func menubarRunning() -> Bool {
+    private static func menubarProbe() -> MenubarProbe {
         do {
-            guard let lock = try RunLock.acquire(path: RunLock.instancePath) else { return true }
+            guard let lock = try RunLock.acquire(path: RunLock.instancePath) else { return .running }
             // Taken and released immediately: doctor must not keep a lock that
             // would then block the app it just reported as absent.
             lock.unlock()
-            return false
+            return .notRunning
         } catch {
-            // Could not tell. Reporting "not running" would be a guess, and
-            // the scheduling check only fails when NOTHING is found, so the
-            // conservative answer is the one that does not raise a false alarm.
-            return true
+            // Reported as unknown, never as running. `RunLock.acquire` returns
+            // nil for contention and throws only when the lock file could not
+            // be opened at all, so this branch means the environment is
+            // broken — exactly when a false all-clear does the most damage.
+            return .unknown(error.localizedDescription)
         }
     }
 

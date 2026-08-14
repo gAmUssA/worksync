@@ -31,6 +31,16 @@ jobs:
       - name: Test
         run: swift test
 
+      # DoctorChecks is pure and unit-tested, but DoctorFacts.gather shells out
+      # to launchctl and codesign, opens a lock, and queries EventKit and
+      # UserNotifications — none of which a unit test touches. Asserts only
+      # things that hold with calendar access DENIED, which is the runner's
+      # permanent state, so it exercises the real gather path without a TCC
+      # grant. Read-only and no-prompt are checked here because those are the
+      # guarantees doctor is documented on.
+      - name: Doctor integration (real process, no TCC grant)
+        run: ./scripts/check-doctor.sh "$(swift build -c debug --show-bin-path)/worksync"
+
       - name: SwiftFormat lint
         run: |
           brew install swiftformat

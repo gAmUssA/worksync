@@ -8,7 +8,7 @@ import Foundation
 public struct SchedulingFacts: Equatable, Sendable {
     public var loginItemEnabled: Bool
     public var launchAgentLoaded: Bool
-    public var menubarRunning: Bool
+    public var menubar: MenubarProbe
     /// The live `SMAppService` status in words, when there is something worth
     /// saying — `requiresApproval` in particular looks like success from every
     /// other angle.
@@ -17,18 +17,36 @@ public struct SchedulingFacts: Equatable, Sendable {
     public init(
         loginItemEnabled: Bool = false,
         launchAgentLoaded: Bool = false,
-        menubarRunning: Bool = false,
+        menubar: MenubarProbe = .notRunning,
         loginItemDetail: String? = nil
     ) {
         self.loginItemEnabled = loginItemEnabled
         self.launchAgentLoaded = launchAgentLoaded
-        self.menubarRunning = menubarRunning
+        self.menubar = menubar
         self.loginItemDetail = loginItemDetail
     }
 
+    /// Only a mechanism actually confirmed counts. An unverifiable probe is
+    /// not a running instance.
     public var somethingWillRun: Bool {
-        loginItemEnabled || launchAgentLoaded || menubarRunning
+        loginItemEnabled || launchAgentLoaded || menubar == .running
     }
+}
+
+/// Whether a menu bar instance is running, or whether we could not tell.
+///
+/// `unknown` is a distinct case rather than being folded into `running`
+/// because the two mislead in opposite directions, and only one of them is
+/// safe. Folding it into "running" turns "I could not check" into an all-clear
+/// on the single most common cause of "why didn't this sync" — and it does so
+/// precisely when the machine is in a bad state. There is no matching risk of
+/// false alarms: on a healthy machine the lock is always acquirable, so this
+/// case simply does not arise.
+public enum MenubarProbe: Equatable, Sendable {
+    case running
+    case notRunning
+    /// The probe failed; carries why, because that failure is itself news.
+    case unknown(String)
 }
 
 /// The app's designated requirement, which is what TCC keys permission grants
@@ -146,7 +164,11 @@ public enum DoctorChecks {
         } else if let config, let calendars = try? inputs.calendars?.get() {
             let report = Resolver.resolveAll(config: config, calendars: calendars)
             findings.append(resolutionCheck(report))
-            findings.append(writabilityCheck(report, blockedBy: report.isComplete ? nil : "resolution failed"))
+            findings.append(writabilityCheck(
+                report,
+                configPath: inputs.configPath,
+                blockedBy: report.isComplete ? nil : "resolution failed"
+            ))
         }
 
         findings.append(schedulingCheck(inputs))
@@ -256,7 +278,15 @@ public enum DoctorChecks {
 
     // MARK: 4. Target calendars are writable
 
-    private static func writabilityCheck(_ report: ResolutionReport, blockedBy: String?) -> DoctorFinding {
+    /// `configPath` is threaded through rather than read from
+    /// `ConfigLoader.defaultPath`, because doctor honours `--config`: naming
+    /// the default file sends a user diagnosing a custom config to edit one
+    /// that is not in play, and the edit then changes nothing.
+    private static func writabilityCheck(
+        _ report: ResolutionReport,
+        configPath: String,
+        blockedBy: String?
+    ) -> DoctorFinding {
         let id = "target-writable"
         let title = "Target calendars are writable"
         if let blockedBy {
@@ -277,7 +307,7 @@ public enum DoctorChecks {
             title,
             cause: CalendarStoreError.calendarNotWritable(first.title),
             detail: readOnly.map { "\($0.accountTitle) / \($0.title) is read-only" },
-            remediation: "Point the target at a writable calendar in \(ConfigLoader.defaultPath), "
+            remediation: "Point the target at a writable calendar in \(configPath), "
                 + "or make it writable in Calendar.app."
         )
     }
@@ -295,7 +325,7 @@ public enum DoctorChecks {
         if facts.launchAgentLoaded {
             detail.append("launchd agent loaded")
         }
-        if facts.menubarRunning {
+        if facts.menubar == .running {
             detail.append("menu bar app running")
         }
         if let extra = facts.loginItemDetail {
@@ -303,6 +333,27 @@ public enum DoctorChecks {
         }
 
         guard !facts.somethingWillRun else { return .ok(id: id, title, detail: detail) }
+
+        // Nothing confirmed, AND the one probe that could still have said
+        // otherwise failed. Reported as a check that blew up (exit 3) rather
+        // than as "nothing is scheduled" — which would overstate what is
+        // known — and emphatically not as a pass, which would hide it.
+        if case let .unknown(reason) = facts.menubar {
+            return .failure(
+                id: id,
+                title,
+                cause: DoctorError.checkFailed(check: "scheduling", detail: reason),
+                detail: detail + [
+                    "could not tell whether a menu bar app is running: \(reason)",
+                    // Worth saying plainly: the same failure stops `sync`
+                    // taking its own lock, so nothing runs until it is fixed.
+                    // This is not merely a gap in the diagnostic.
+                    "the same failure would stop `worksync sync` taking its lock",
+                ],
+                remediation: "Check that \(RunLock.instancePath) and its directory are readable and writable."
+            )
+        }
+
         return .failure(
             id: id,
             title,

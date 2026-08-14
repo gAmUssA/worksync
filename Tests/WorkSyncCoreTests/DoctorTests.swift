@@ -240,6 +240,43 @@ final class DoctorTests: XCTestCase {
         XCTAssertEqual(report.exitCode(), ExitCodes.configError, "the fix is in config.toml")
     }
 
+    func testWritabilityRemediationNamesTheConfigActuallyInUse() throws {
+        // doctor honours --config, so naming the default path would send a
+        // user diagnosing a custom config to edit a file that is not in play —
+        // and the edit would then change nothing about the failing run.
+        var inputs = healthyInputs()
+        inputs.configPath = "/Users/someone/work/alt-worksync.toml"
+        inputs.calendars = .success([
+            personalCal,
+            CalendarRef(id: "cal-work", title: "Calendar", accountTitle: "Work", allowsModifications: false),
+        ])
+
+        let remediation = try XCTUnwrap(finding("target-writable", in: DoctorChecks.run(inputs)).remediation)
+        XCTAssertTrue(remediation.contains("/Users/someone/work/alt-worksync.toml"), remediation)
+        XCTAssertFalse(
+            remediation.contains(ConfigLoader.defaultPath),
+            "the default path is not the file being diagnosed: \(remediation)"
+        )
+    }
+
+    func testEveryRemediationThatNamesAConfigFileNamesTheRightOne() {
+        // Guards the whole class rather than the one instance the review
+        // found: any check that points at a config file must point at the one
+        // doctor was actually given.
+        var inputs = healthyInputs()
+        inputs.configPath = "/Users/someone/work/alt-worksync.toml"
+        inputs.config = .failure(ConfigError.noSources)
+
+        for finding in DoctorChecks.run(inputs).findings {
+            let text = (finding.detail + [finding.remediation ?? ""]).joined(separator: " ")
+            guard text.contains("config.toml") || text.contains(".toml") else { continue }
+            XCTAssertFalse(
+                text.contains(ConfigLoader.defaultPath),
+                "\"\(finding.id)\" names the default config instead of the one in use: \(text)"
+            )
+        }
+    }
+
     // MARK: 5. Something is running
 
     func testNothingScheduledIsAnError() throws {
@@ -257,7 +294,7 @@ final class DoctorTests: XCTestCase {
         let mechanisms = [
             SchedulingFacts(loginItemEnabled: true),
             SchedulingFacts(launchAgentLoaded: true),
-            SchedulingFacts(menubarRunning: true),
+            SchedulingFacts(menubar: .running),
         ]
         for scheduling in mechanisms {
             var inputs = healthyInputs()
@@ -267,6 +304,54 @@ final class DoctorTests: XCTestCase {
                 "\(scheduling) should satisfy the check on its own"
             )
         }
+    }
+
+    func testAnUnverifiableMenuBarProbeIsNotTreatedAsRunning() throws {
+        // The failure mode this prevents: folding "could not check" into
+        // "running" turns a broken lock directory into a green scheduling
+        // check — a false all-clear on the single most common cause of
+        // "why didn't this sync", delivered exactly when the machine is
+        // already in a bad state.
+        var inputs = healthyInputs()
+        inputs.scheduling = SchedulingFacts(menubar: .unknown("Permission denied"))
+
+        let found = try finding("scheduling", in: DoctorChecks.run(inputs))
+        XCTAssertNotEqual(found.severity, .ok, "an unchecked probe must never read as healthy")
+        XCTAssertTrue(
+            found.detail.joined(separator: " ").contains("Permission denied"),
+            "the reason the probe failed is the actionable part: \(found.detail)"
+        )
+    }
+
+    func testAnUnverifiableProbeExitsThreeRatherThanClaimingNothingIsScheduled() {
+        // Exit 3 is "a check itself blew up". Reporting .nothingScheduled here
+        // would overstate what is actually known.
+        var inputs = healthyInputs()
+        inputs.scheduling = SchedulingFacts(menubar: .unknown("Operation not permitted"))
+        XCTAssertEqual(DoctorChecks.run(inputs).exitCode(), ExitCodes.partialFailure)
+    }
+
+    func testAConfirmedMechanismStillWinsOverAFailedProbe() throws {
+        // A registered login item is proof on its own, so a broken probe must
+        // not turn a healthy machine red either.
+        var inputs = healthyInputs()
+        inputs.scheduling = SchedulingFacts(
+            loginItemEnabled: true, menubar: .unknown("Permission denied")
+        )
+        XCTAssertEqual(try finding("scheduling", in: DoctorChecks.run(inputs)).severity, .ok)
+    }
+
+    func testTheProbeFailureNamesItsWiderConsequence() throws {
+        // The same failure stops `sync` taking its pass lock, so this is not
+        // merely a gap in the diagnostic — nothing runs until it is fixed.
+        var inputs = healthyInputs()
+        inputs.scheduling = SchedulingFacts(menubar: .unknown("Permission denied"))
+
+        let found = try finding("scheduling", in: DoctorChecks.run(inputs))
+        XCTAssertTrue(
+            found.detail.joined(separator: " ").contains("worksync sync"),
+            "\(found.detail)"
+        )
     }
 
     // MARK: 6. Signing (warning)
