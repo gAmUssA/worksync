@@ -251,6 +251,10 @@ final class StatusItemController: NSObject {
         // content renders light-mode colours — dark text and white cards — on
         // a dark backdrop, which is illegible (SPEC §11).
         panel.appearance = NSApp.effectiveAppearance
+        // The settings screen adds and removes controls as the selected source
+        // changes, so the key view loop has to be recalculated or Tab
+        // navigation goes stale against views that no longer exist.
+        panel.autorecalculatesKeyViewLoop = true
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView?.wantsLayer = true
