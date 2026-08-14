@@ -1,5 +1,19 @@
 import Foundation
 
+public enum RunLockError: Error, LocalizedError, Equatable {
+    /// The lock file itself could not be created or opened. A broken
+    /// environment, not a busy one.
+    case unavailable(path: String, code: Int32)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .unavailable(path, code):
+            "Could not open the run lock at \(path): \(String(cString: strerror(code))). "
+                + "Check that the directory exists and is writable."
+        }
+    }
+}
+
 /// Cross-process mutual exclusion for a sync pass (SPEC §9).
 ///
 /// A manual `worksync sync` in a terminal and the menu bar app's timer must
@@ -13,20 +27,42 @@ public final class RunLock {
     private let descriptor: Int32
     private var released = false
 
-    /// Returns nil when another process holds the lock.
-    public init?(path: String = RunLock.defaultPath) {
+    private init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    /// Takes the lock.
+    ///
+    /// Returns nil for the one benign case — another process holds it — and
+    /// throws for everything else. The distinction is the whole point: a
+    /// permission or filesystem problem that made the lock file unopenable
+    /// would otherwise look identical to "a pass is already running", and every
+    /// sync from then on would exit 0 having done nothing. Silent, permanent,
+    /// and indistinguishable from healthy in the logs.
+    public static func acquire(path: String = RunLock.defaultPath) throws -> RunLock? {
         let directory = (path as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(
             atPath: directory, withIntermediateDirectories: true
         )
-        descriptor = open(path, O_CREAT | O_RDWR, 0o644)
-        guard descriptor >= 0 else { return nil }
+
+        let descriptor = open(path, O_CREAT | O_RDWR, 0o644)
+        guard descriptor >= 0 else {
+            throw RunLockError.unavailable(path: path, code: errno)
+        }
+
         // LOCK_NB: fail immediately rather than queueing behind the running
         // pass — by the time it finished, this one's window would be stale.
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let failure = errno
             close(descriptor)
-            return nil
+            // EWOULDBLOCK (== EAGAIN) is contention. Anything else is a real
+            // failure and must not be reported as a quiet no-op.
+            if failure == EWOULDBLOCK {
+                return nil
+            }
+            throw RunLockError.unavailable(path: path, code: failure)
         }
+        return RunLock(descriptor: descriptor)
     }
 
     /// Releases the lock. Idempotent, and safe to call from a `defer` — which

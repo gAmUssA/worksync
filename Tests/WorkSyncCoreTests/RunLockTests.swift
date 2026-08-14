@@ -14,41 +14,60 @@ final class RunLockTests: XCTestCase {
         super.tearDown()
     }
 
-    func testSecondAcquisitionInSameProcessIsRefused() {
-        let first = RunLock(path: path)
+    func testSecondAcquisitionInSameProcessIsRefused() throws {
+        let first = try RunLock.acquire(path: path)
         XCTAssertNotNil(first)
         // flock is per open file description, so a second open() in this
         // process contends exactly as another process would.
-        XCTAssertNil(RunLock(path: path), "a held lock must refuse, not queue")
+        XCTAssertNil(try RunLock.acquire(path: path), "a held lock must refuse, not queue")
         first?.unlock()
     }
 
-    func testLockIsReacquirableAfterUnlock() {
-        let first = RunLock(path: path)
+    func testLockIsReacquirableAfterUnlock() throws {
+        let first = try RunLock.acquire(path: path)
         XCTAssertNotNil(first)
         first?.unlock()
 
-        let second = RunLock(path: path)
+        let second = try RunLock.acquire(path: path)
         XCTAssertNotNil(second, "releasing must actually release")
         second?.unlock()
     }
 
-    func testUnlockIsIdempotent() {
-        let lock = RunLock(path: path)
+    func testUnlockIsIdempotent() throws {
+        let lock = try RunLock.acquire(path: path)
         lock?.unlock()
         lock?.unlock() // must not close an unrelated descriptor
-        XCTAssertNotNil(RunLock(path: path))
+        XCTAssertNotNil(try RunLock.acquire(path: path))
     }
 
-    func testCreatesTheParentDirectory() {
-        let nested = NSTemporaryDirectory() + "worksync-test-\(UUID().uuidString)/nested/.lock"
-        defer {
-            try? FileManager.default.removeItem(
-                atPath: (((nested as NSString).deletingLastPathComponent) as NSString).deletingLastPathComponent
-            )
-        }
-        let lock = RunLock(path: nested)
+    func testCreatesTheParentDirectory() throws {
+        let root = NSTemporaryDirectory() + "worksync-test-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let lock = try RunLock.acquire(path: root + "/nested/.lock")
         XCTAssertNotNil(lock, "a first run on a clean machine has no ~/.config/worksync yet")
         lock?.unlock()
+    }
+
+    // MARK: Contention vs. a broken environment
+
+    func testUnopenableLockPathThrowsRatherThanReadingAsContention() {
+        // The distinction that matters: if this returned nil like contention
+        // does, every sync would exit 0 having silently done nothing, forever,
+        // and the logs would look healthy.
+        let blocker = NSTemporaryDirectory() + "worksync-test-\(UUID().uuidString)"
+        FileManager.default.createFile(atPath: blocker, contents: Data())
+        defer { try? FileManager.default.removeItem(atPath: blocker) }
+
+        // A path *through* a regular file can never be opened (ENOTDIR).
+        XCTAssertThrowsError(try RunLock.acquire(path: blocker + "/nested/.lock")) { error in
+            guard case .unavailable = error as? RunLockError else {
+                return XCTFail("expected RunLockError.unavailable, got \(error)")
+            }
+        }
+    }
+
+    func testLockSetupFailureIsARerunnablePartialFailure() {
+        // Not a config error: sending the user to edit config.toml would be wrong.
+        XCTAssertEqual(ExitCodes.code(for: RunLockError.unavailable(path: "/x", code: ENOTDIR)), 3)
     }
 }

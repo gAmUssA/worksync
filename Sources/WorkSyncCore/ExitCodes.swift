@@ -18,6 +18,10 @@ public enum ExitCodes {
         switch error {
         case is ConfigError, is ResolutionError:
             configError
+        case is RunLockError:
+            // The lock file could not be opened at all — an environment
+            // problem, not a config one, and re-runnable once fixed.
+            partialFailure
         case let storeError as CalendarStoreError:
             switch storeError {
             case .accessDenied, .accessRestricted:

@@ -5,7 +5,17 @@ import WorkSyncKit
 
 struct Purge: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Delete ALL worksync-managed events (or one source's)."
+        abstract: "Delete ALL worksync-managed events (or one source's).",
+        discussion: """
+        Scans every calendar on every account within ±365 days — not just the \
+        currently configured targets — so it also collects events stranded by a \
+        since-changed config, such as a renamed source id.
+
+        Exit codes: 0 when the sweep was complete and everything asked for was \
+        done; 3 when a calendar could not be scanned, a deletion failed, or \
+        another worksync process held the run lock. A non-zero exit always means \
+        "the calendar may still contain managed events" — safe to re-run.
+        """
     )
 
     @Option(name: .long, help: "Only purge events created under this source id")
@@ -18,84 +28,78 @@ struct Purge: ParsableCommand {
         let store = EventKitStore()
         requestAccessOrExit(store)
 
-        // Purge is deliberately NOT bound to the rolling sync window: it scans
-        // every calendar on every account so it also collects events stranded
-        // by a since-changed config — a renamed source id, a retargeted
-        // calendar (SPEC §8).
-        let span = PurgeScan.span(around: Date())
-        let calendars: [CalendarRef]
-        do {
-            calendars = try store.calendars()
-        } catch {
-            fail(error)
-        }
-
-        var managed: [(event: StoredEvent, marker: Marker, calendar: CalendarRef)] = []
-        for calendar in calendars {
-            let events: [StoredEvent]
+        // Take the lock BEFORE scanning when we intend to delete, so the sweep
+        // cannot observe a calendar that a sync pass is midway through writing.
+        // A count-only run needs no lock: it mutates nothing.
+        var lock: RunLock?
+        if yes {
             do {
-                events = try store.events(in: calendar, from: span.start, to: span.end)
+                guard let acquired = try RunLock.acquire() else {
+                    // Unlike a sync, purge exiting 0 here would be a lie: the
+                    // process holding the lock is running a sync, not a purge,
+                    // so nobody is doing this work. Automation must be able to
+                    // tell "cleaned up" from "did nothing".
+                    fail("another worksync process is running; nothing was deleted", ExitCodes.partialFailure)
+                }
+                lock = acquired
             } catch {
-                // One unreadable calendar must not abort the sweep; report and
-                // keep going, then exit 3 so the incompleteness is visible.
-                FileHandle.standardError.write(Data(
-                    "warning: could not scan \(calendar.accountTitle)/\(calendar.title): \(error.localizedDescription)\n"
-                        .utf8
-                ))
-                continue
-            }
-            for event in events {
-                guard let marker = PurgeScan.claimable(event, sourceFilter: source) else { continue }
-                managed.append((event, marker, calendar))
+                fail(error)
             }
         }
+        defer { lock?.unlock() }
 
-        if managed.isEmpty {
+        let scan = PurgeEngine.scan(store: store, now: Date(), sourceFilter: source)
+
+        for failure in scan.scanFailures {
+            FileHandle.standardError.write(Data("warning: could not scan \(failure)\n".utf8))
+        }
+
+        let counts = scan.countsBySource
+        for sourceID in counts.keys.sorted() {
+            print("\(sourceID): \(counts[sourceID]!) event(s)")
+        }
+
+        if scan.found.isEmpty {
             print(source.map { "No managed events found for source \"\($0)\"." }
                 ?? "No managed events found.")
+            // "Found nothing" after an incomplete sweep proves nothing.
+            if !scan.isComplete {
+                fail(
+                    "\(scan.scanFailures.count) calendar(s) could not be scanned; "
+                        + "managed events may remain. Safe to re-run.",
+                    ExitCodes.partialFailure
+                )
+            }
             return
-        }
-
-        let bySource = Dictionary(grouping: managed, by: { $0.marker.sourceID })
-        for sourceID in bySource.keys.sorted() {
-            print("\(sourceID): \(bySource[sourceID]!.count) event(s)")
         }
 
         guard yes else {
-            print("\(managed.count) event(s) would be deleted. Re-run with --yes to delete them.")
+            print("\(scan.found.count) event(s) would be deleted. Re-run with --yes to delete them.")
+            if !scan.isComplete {
+                fail(
+                    "\(scan.scanFailures.count) calendar(s) could not be scanned; the count above is a lower bound.",
+                    ExitCodes.partialFailure
+                )
+            }
             return
         }
 
-        // Take the lock: purging while a pass is mid-write would race the
-        // reconciler over the same events (SPEC §9).
-        guard let lock = RunLock() else {
-            print("another sync is already running; try again in a moment")
-            return
-        }
-        defer { lock.unlock() }
+        let result = PurgeEngine.delete(scan.found, store: store)
+        print("deleted=\(result.deleted)")
 
-        var deleted = 0
-        var failures: [String] = []
-        for item in managed {
-            do {
-                try store.delete(eventIdentifier: item.event.eventIdentifier)
-                deleted += 1
-            } catch {
-                failures.append("\"\(item.event.title)\": \(error.localizedDescription)")
-            }
-        }
-        do {
-            try store.commit()
-        } catch {
-            failures.append("commit failed: \(error.localizedDescription)")
+        for failure in result.failures {
+            FileHandle.standardError.write(Data("error: \(failure)\n".utf8))
         }
 
-        print("deleted=\(deleted)")
-        if !failures.isEmpty {
-            for failure in failures {
-                FileHandle.standardError.write(Data("error: \(failure)\n".utf8))
+        if !result.failures.isEmpty || !scan.isComplete {
+            var reasons: [String] = []
+            if !result.failures.isEmpty {
+                reasons.append("\(result.failures.count) deletion(s) failed")
             }
-            fail("\(failures.count) deletion(s) failed; safe to re-run", ExitCodes.partialFailure)
+            if !scan.isComplete {
+                reasons.append("\(scan.scanFailures.count) calendar(s) could not be scanned")
+            }
+            fail(reasons.joined(separator: "; ") + "; safe to re-run", ExitCodes.partialFailure)
         }
     }
 }

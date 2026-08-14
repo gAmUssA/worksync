@@ -14,6 +14,10 @@ public final class InMemoryCalendarStore: CalendarStore {
     public var failCreates = false
     public var failDeletes = false
     public var failCommit = false
+    /// Calendars whose `events(in:from:to:)` throws, to exercise the
+    /// incomplete-sweep paths without needing a misbehaving backend.
+    public var failReadsForCalendarIds: Set<String> = []
+    public var failCalendarListing = false
 
     /// Counts of staged-but-uncommitted writes, so tests can assert batching.
     public private(set) var pendingWrites = 0
@@ -36,10 +40,16 @@ public final class InMemoryCalendarStore: CalendarStore {
     }
 
     public func calendars() throws -> [CalendarRef] {
-        calendarList
+        if failCalendarListing {
+            throw CalendarStoreError.backendError("injected calendar listing failure")
+        }
+        return calendarList
     }
 
     public func events(in calendar: CalendarRef, from: Date, to: Date) throws -> [StoredEvent] {
+        if failReadsForCalendarIds.contains(calendar.id) {
+            throw CalendarStoreError.backendError("injected read failure for \(calendar.title)")
+        }
         let span = Interval(start: from, end: to)
         return (eventsByCalendar[calendar.id] ?? []).filter {
             Interval(start: $0.start, end: $0.end).overlaps(span)

@@ -26,14 +26,21 @@ struct Sync: ParsableCommand {
         if dryRun {
             lock = nil
         } else {
-            guard let acquired = RunLock() else {
-                // Not an error: another pass is already doing this work (SPEC §9).
-                if verbose {
-                    print("another sync is already running; exiting quietly")
+            do {
+                guard let acquired = try RunLock.acquire() else {
+                    // Not an error: another pass is already doing this work
+                    // (SPEC §9). Only genuine contention lands here — a lock
+                    // file that cannot be opened throws instead, so a broken
+                    // environment can never masquerade as a healthy no-op.
+                    if verbose {
+                        print("another sync is already running; exiting quietly")
+                    }
+                    return
                 }
-                return
+                lock = acquired
+            } catch {
+                fail(error)
             }
-            lock = acquired
         }
         defer { lock?.unlock() }
 
