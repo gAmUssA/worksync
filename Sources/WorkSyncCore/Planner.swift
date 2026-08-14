@@ -95,7 +95,7 @@ public enum SyncPlanner {
         blocks(
             source: source,
             targetCalendar: targetCalendar,
-            eligibleEvents: eligible(events, for: source),
+            eligibleEvents: eligible(events, for: source, calendar: calendar),
             window: window,
             calendar: calendar
         )
@@ -106,7 +106,11 @@ public enum SyncPlanner {
     /// to see exactly the events a source would actually mirror: an event a
     /// source filters out must never claim an identity and thereby block a
     /// later source from producing it.
-    public static func eligible(_ events: [StoredEvent], for source: SourceConfig) -> [StoredEvent] {
+    public static func eligible(
+        _ events: [StoredEvent],
+        for source: SourceConfig,
+        calendar: Calendar = .current
+    ) -> [StoredEvent] {
         events.filter { event in
             // No usable identity means no stable marker key: two such events
             // would hash to the same key and silently collapse into one entry
@@ -126,6 +130,20 @@ public enum SyncPlanner {
             }
             if !event.isAllDay,
                event.end.timeIntervalSince(event.start) < Double(source.minDurationMinutes) * 60 {
+                return false
+            }
+            // Measured on the raw event, before padding: padding is config that
+            // has nothing to do with how long the event really is, and letting
+            // it decide eligibility would make the filter depend on unrelated
+            // settings. Coalesced clusters are deliberately exempt — a long
+            // block built from back-to-back real meetings is honest busy time.
+            if !event.isAllDay, source.maxDurationMinutes > 0,
+               event.end.timeIntervalSince(event.start) > Double(source.maxDurationMinutes) * 60 {
+                return false
+            }
+            if Weekday.fallsEntirelyOnSkippedDays(
+                start: event.start, end: event.end, skip: source.skipWeekdays, calendar: calendar
+            ) {
                 return false
             }
             return true

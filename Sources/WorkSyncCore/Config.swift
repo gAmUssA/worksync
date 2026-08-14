@@ -45,6 +45,12 @@ public struct SourceConfig: Equatable, Sendable {
     public var coalesce: Bool = false
     public var coalesceGapMinutes: Int = 15
     public var minDurationMinutes: Int = 0
+    /// 0 means unlimited. Timed events only — every all-day event exceeds any
+    /// sane maximum, and all-day is already gated by `includeAllDay`.
+    public var maxDurationMinutes: Int = 0
+    /// `Calendar` weekday components (1 = Sunday … 7 = Saturday). Empty skips
+    /// nothing.
+    public var skipWeekdays: Set<Int> = []
     public var paddingBeforeMinutes: Int = 0
     public var paddingAfterMinutes: Int = 0
     public var includeAllDay: Bool = false
@@ -193,6 +199,30 @@ public enum ConfigLoader {
                 if let v = s["min_duration_minutes"]?.int {
                     source.minDurationMinutes = v
                 }
+                if let v = s["max_duration_minutes"]?.int {
+                    source.maxDurationMinutes = v
+                }
+                if let v = s["skip_weekdays"]?.array {
+                    var days = Set<Int>()
+                    for element in v {
+                        guard let name = element.string else {
+                            throw ConfigError.invalidValue(
+                                field: "source \"\(id)\".skip_weekdays",
+                                value: String(describing: element),
+                                allowed: Weekday.allowedNames
+                            )
+                        }
+                        guard let component = Weekday.component(from: name) else {
+                            throw ConfigError.invalidValue(
+                                field: "source \"\(id)\".skip_weekdays",
+                                value: name,
+                                allowed: Weekday.allowedNames
+                            )
+                        }
+                        days.insert(component)
+                    }
+                    source.skipWeekdays = days
+                }
                 if let v = s["padding_before_minutes"]?.int {
                     source.paddingBeforeMinutes = v
                 }
@@ -242,6 +272,22 @@ public enum ConfigLoader {
         for source in config.sources {
             try checkNonNegative(source.coalesceGapMinutes, "source \"\(source.id)\".coalesce_gap_minutes", min: 0)
             try checkNonNegative(source.minDurationMinutes, "source \"\(source.id)\".min_duration_minutes", min: 0)
+            try checkNonNegative(source.maxDurationMinutes, "source \"\(source.id)\".max_duration_minutes", min: 0)
+            // An unsatisfiable window would silently mirror nothing at all.
+            if source.maxDurationMinutes > 0, source.maxDurationMinutes < source.minDurationMinutes {
+                throw ConfigError.invalidValue(
+                    field: "source \"\(source.id)\".max_duration_minutes",
+                    value: String(source.maxDurationMinutes),
+                    allowed: ">= min_duration_minutes (\(source.minDurationMinutes)), or 0 for unlimited"
+                )
+            }
+            if source.skipWeekdays.count == 7 {
+                throw ConfigError.invalidValue(
+                    field: "source \"\(source.id)\".skip_weekdays",
+                    value: "all seven days",
+                    allowed: "at most six days — skipping every day mirrors nothing"
+                )
+            }
             try checkNonNegative(source.paddingBeforeMinutes, "source \"\(source.id)\".padding_before_minutes", min: 0)
             try checkNonNegative(source.paddingAfterMinutes, "source \"\(source.id)\".padding_after_minutes", min: 0)
         }

@@ -102,6 +102,8 @@ target_calendar = ""               # empty = use [target].calendar
 coalesce = true                    # merge overlapping/adjacent events
 coalesce_gap_minutes = 15          # gaps <= this are merged
 min_duration_minutes = 15          # ignore shorter source events
+max_duration_minutes = 0           # 0 = unlimited; ignore longer source events
+skip_weekdays = []                 # e.g. ["sat", "sun"] — days never mirrored
 padding_before_minutes = 0
 padding_after_minutes = 0
 include_all_day = false
@@ -134,6 +136,9 @@ availability = "busy"
 - Config validation runs before any calendar mutation. Invalid config = non-zero exit, no writes.
 - **Source order is semantically load-bearing, not cosmetic.** The first-listed source wins cross-source dedup (§5 step 5), so reordering `[[source]]` blocks silently changes which source's title/target calendar/padding a shared event gets — with no error and no warning anywhere in the pipeline. Any tool that writes this file must preserve source order exactly, and any editing UI must support reordering (§11.1), not just add and remove.
 - A source's `id` is embedded verbatim in every managed event's marker (§7). Renaming an id orphans every event created under the old id: the new id will never match them, so they are never updated and never deleted by a normal sync — they are reachable only via `worksync purge --source <old-id>`. This is a data-integrity concern, not a UI nicety: any tool that writes config.toml must warn before committing an id rename on an existing source, and must tell the user the purge command that recovers the orphans. Ids of brand-new sources need no warning, since nothing exists under them yet.
+- `max_duration_minutes` (0 = unlimited) drops absurdly long timed events — usually informational entries from subscribed calendars — that would otherwise paint one enormous block hiding the real meetings underneath. Three rules: it applies to **timed events only** (all-day is already gated by `include_all_day`, and every all-day event exceeds any sane maximum); it is measured on the **raw event, before padding**, so unrelated config cannot decide eligibility; and it does **not** apply to coalesced clusters, because a long block built from back-to-back real meetings is honest busy time. Because it is per-source, a travel source that must keep 12-hour flights (§9) simply leaves it at 0. Validation rejects a maximum below the minimum, which would silently mirror nothing.
+- `skip_weekdays` (e.g. `["sat", "sun"]`) never mirrors events falling on those days. The motivation is privacy, not tidiness: even a sanitized `Busy` block reveals that the user has weekend commitments, and a run of them reveals a pattern — exactly the signal the rest of this design avoids leaking. **The rule is whole-interval: an event is dropped only when every minute of it falls on a skipped day.** Testing the start day instead would drop a Saturday 23:00 → Monday 02:00 event that covers Monday morning, which under-blocks and risks a double-booking; over-blocking is merely untidy, so the filter fails in the safe direction (the same principle as treating indeterminate availability as busy). Weekdays are evaluated in the system timezone, consistent with `{date}`/`{weekday}` rendering. Skipping all seven days is a config error.
+- Both filters run in the step-3 eligibility pass, which puts them before padding, before coalescing, and before cross-source dedup — so a filtered-out event never claims an identity and never blocks a later source from mirroring it (§5 step 5).
 - `notify`, `change_driven`, and `change_debounce_seconds` affect the menu bar mode only; the one-shot CLI ignores them.
 
 ### 4.2 Event coloring — constraint and approach

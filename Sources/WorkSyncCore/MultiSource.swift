@@ -71,7 +71,7 @@ public extension SyncPlanner {
         for input in inputs {
             // Step 3 first: only an event this source would actually mirror is
             // allowed to claim an identity.
-            let eligible = SyncPlanner.eligible(input.events, for: input.source)
+            let eligible = SyncPlanner.eligible(input.events, for: input.source, calendar: calendar)
 
             var unclaimed: [StoredEvent] = []
             var dropped = 0
