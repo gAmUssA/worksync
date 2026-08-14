@@ -46,7 +46,9 @@ struct Sync: ParsableCommand {
 
         let plan: SyncPlan
         do {
-            plan = try Self.plan(config: config, store: store, now: Date(), verbose: verbose)
+            let pass = try SyncPipeline.plan(config: config, store: store, now: Date())
+            report(pass.diagnostics)
+            plan = pass.plan
         } catch {
             // Everything the pass can throw maps through the one documented
             // contract (SPEC §8): resolution problems are config errors, a grant
@@ -75,66 +77,27 @@ struct Sync: ParsableCommand {
         }
     }
 
-    /// The shared read-and-plan pipeline (SPEC §5, steps 1–8).
-    static func plan(config: Config, store: CalendarStore, now: Date, verbose: Bool) throws -> SyncPlan {
-        let calendars = try store.calendars()
-        let resolved = try Resolver.resolve(config: config, calendars: calendars)
-        let window = SyncPlanner.window(now: now, windowDays: config.general.windowDays)
-
-        // Steps 2–3: fetch per source, in config order — the order decides who
-        // wins cross-source dedup below.
-        var inputs: [SourcePlanInput] = []
-        for source in config.sources {
-            guard let sourceCal = resolved.sourceCalendars[source.id],
-                  let targetCal = resolved.targetCalendars[source.id] else { continue }
-            let events = try store.events(in: sourceCal, from: window.start, to: window.end)
-            if verbose {
-                print("source \(source.id): fetched \(events.count) events from \(sourceCal.title)"
-                    + " -> \(targetCal.title)")
-            }
-            // Never drop these silently: without an identifier they cannot be
-            // reconciled idempotently, so they produce no blocker at all.
-            let unidentifiable = SyncPlanner.unidentifiable(events)
-            if !unidentifiable.isEmpty {
-                FileHandle.standardError.write(Data(
-                    "warning: source \(source.id): skipped \(unidentifiable.count) event(s) with no stable identifier\n"
-                        .utf8
-                ))
-            }
-            inputs.append(SourcePlanInput(source: source, targetCalendar: targetCal, events: events))
+    /// Renders what the pass learned. Warnings go to stderr because they mean
+    /// work silently did not happen; the per-source detail is verbose-only.
+    private func report(_ diagnostics: PassDiagnostics) {
+        for sourceID in diagnostics.unidentifiableBySource.keys.sorted() {
+            let message = "warning: source \(sourceID): skipped"
+                + " \(diagnostics.unidentifiableBySource[sourceID]!) event(s) with no stable identifier\n"
+            FileHandle.standardError.write(Data(message.utf8))
         }
-
-        // Steps 4–5: dedup across sources, then transform.
-        let multi = SyncPlanner.desiredAcrossSources(inputs, window: window)
-        if verbose {
-            for sourceID in multi.duplicatesDropped.keys.sorted() {
-                print("source \(sourceID): \(multi.duplicatesDropped[sourceID]!) event(s)"
-                    + " already claimed by an earlier source")
-            }
+        guard verbose else { return }
+        for sourceID in diagnostics.fetchedBySource.keys.sorted() {
+            let target = diagnostics.targetBySource[sourceID] ?? "?"
+            print("source \(sourceID): fetched \(diagnostics.fetchedBySource[sourceID]!) event(s) -> \(target)")
         }
-
-        // Step 6: one fetch of the target calendars, reused by both the
-        // conflict check and reconciliation.
-        var existing: [StoredEvent] = []
-        for target in resolved.allTargets {
-            existing += try store.events(in: target, from: window.start, to: window.end)
+        for sourceID in diagnostics.duplicatesDroppedBySource.keys.sorted() {
+            print("source \(sourceID): \(diagnostics.duplicatesDroppedBySource[sourceID]!)"
+                + " event(s) already claimed by an earlier source")
         }
-
-        // Step 7: drop blocks the work calendar already covers.
-        let conflict = SyncPlanner.applyConflictSkips(
-            to: multi.blocks, existingOnTargets: existing, sources: config.sources
-        )
-        if verbose {
-            for sourceID in conflict.skippedBySource.keys.sorted() {
-                print("source \(sourceID): \(conflict.skippedBySource[sourceID]!) block(s)"
-                    + " skipped — work calendar already busy")
-            }
+        for sourceID in diagnostics.conflictSkippedBySource.keys.sorted() {
+            print("source \(sourceID): \(diagnostics.conflictSkippedBySource[sourceID]!)"
+                + " block(s) skipped — work calendar already busy")
         }
-
-        // Step 8: reconcile.
-        var plan = SyncPlanner.reconcile(desired: conflict.kept, existingOnTargets: existing)
-        plan.skippedCount = conflict.skipped
-        return plan
     }
 
     private func printPlan(_ plan: SyncPlan) {

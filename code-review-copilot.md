@@ -1,104 +1,81 @@
 # WorkSync Code Review (Copilot)
 
-## Snapshot (Milestone 2 Delta)
-- Review type: delta review (M1 -> M2)
-- Baseline commit (M1 anchor): 35edd006bbde471b0de7b5d4eb973b6d3d1c2206 (35edd00)
-- Current commit reviewed: c68fc68301677fa1b136929717309ce92cc8f2ca (c68fc68)
-- Milestone landing commit in range: 4f6d581 (M2: reconciliation writes, purge, and cross-process run lock)
+## Findings (ordered by severity)
+
+### No blocking defects found in M3 delta
+I did not find functional regressions in the implemented M3 scope (cross-source dedup, conflict check, per-source target routing), and the behavior is strongly covered by tests.
+
+### Residual risk 1 (Medium): No direct CLI-level test for end-to-end `sync` M3 plan reporting
+**Why it matters**
+M3 behavior is heavily tested at core level, but there is no command-level test that validates `sync` output semantics (for example, verbose dedup/conflict messages and summary-line skipped counts) in one integrated flow.
+
+**Evidence**
+- Core logic is covered: `Tests/WorkSyncCoreTests/MultiSourceTests.swift` and `Tests/WorkSyncCoreTests/SyncEngineTests.swift`
+- No dedicated CLI test target for `Sources/worksync/Sync.swift`
+
+**Risk/impact**
+- Low runtime risk, but possible drift between core behavior and CLI observability/output contract.
+
+**Recommendation**
+Add a thin command-level test harness (or integration smoke test) for one synthetic multi-source scenario validating:
+1. dedup winner by source order,
+2. conflict skip count,
+3. summary line fields (`created/updated/deleted/skipped/unchanged`).
+
+---
+
+### Residual risk 2 (Low): New filter semantics (`max_duration_minutes`, `skip_weekdays`) have no EventKit-backed integration run
+**Why it matters**
+Filter behavior is well unit-tested with deterministic calendars/timezones, but there is no real-store integration check yet.
+
+**Evidence**
+- Unit coverage exists: `Tests/WorkSyncCoreTests/FiltersTests.swift`
+- No EventKit-backed automated integration test for weekday boundaries/timezone edges.
+
+**Risk/impact**
+- Low to medium operational risk around edge timezone/week-boundary cases in real calendars.
+
+**Recommendation**
+Add manual checklist cases (or scripted local smoke run) for:
+1. weekend-spanning event that crosses into Monday,
+2. `max_duration_minutes` with large padding,
+3. all-day events under skip-weekday rules.
+
+## Snapshot (Milestone 3 Delta)
+- Review type: Delta review (M2 -> current M3-ready HEAD)
+- Baseline commit (previous review anchor): `c68fc68301677fa1b136929717309ce92cc8f2ca` (`c68fc68`)
+- Current commit reviewed: `074bbc18a993c3d812bded15291e4f4926381645` (`074bbc1`)
+- M3 landing commits in range:
+  - `8f0ad83` - M3: cross-source dedup, conflict check, per-source target routing
+  - `a0e8b78` - close M3
+  - plus follow-up filter commits included in current HEAD (`5271291`)
 - Working tree at review time: clean
 - Review date: 2026-08-13
 
-## Scope
-This review covers changes introduced after M1, with focus on M2 deliverables:
-- reconciliation writes and apply pipeline
-- marker persistence and parsing behavior
-- purge command and bounded scan behavior
-- cross-process lock behavior
-- exit-code mapping behavior
-- tests added/updated for M2 paths
+## Scope reviewed
+- `Sync.plan(...)` M3 pipeline steps and ordering
+- cross-source dedup identity and source-order precedence
+- conflict check (80% threshold with union overlap)
+- per-source target routing
+- run lock and purge behavior regressions from M2 follow-up
+- new filter features added after M3 landing (`max_duration_minutes`, `skip_weekdays`)
 
-## Verification Run
-- swift test passed
-- Result: 79 tests, 0 failures
+## Verification run
+- Command: `swift test`
+- Result: **125 tests, 0 failures**
 
-## Findings (ordered by severity)
+## What changed and looks correct
+- M3 pipeline wiring in CLI sync path:
+  - `Sources/worksync/Sync.swift`
+- Cross-source dedup and conflict filtering core:
+  - `Sources/WorkSyncCore/MultiSource.swift`
+  - `Sources/WorkSyncCore/Planner.swift`
+- New/expanded tests:
+  - `Tests/WorkSyncCoreTests/MultiSourceTests.swift`
+  - `Tests/WorkSyncCoreTests/FiltersTests.swift`
+  - `Tests/WorkSyncCoreTests/PurgeEngineTests.swift`
 
-### 1) High: purge can return success after an incomplete scan
-Why it matters:
-- The command can tell users no managed events were found even when one or more calendars failed to scan.
+## Assessment
+M3 is in good shape. The implemented behavior matches milestone intent, key safety invariants remain intact, and coverage improved materially.
 
-Evidence:
-- Scan failures are warned and skipped: Sources/worksync/Purge.swift:39-46
-- Empty managed set returns success immediately: Sources/worksync/Purge.swift:53-57
-
-Risk/impact:
-- False confidence that purge completed successfully.
-- Operational cleanup can remain incomplete without a failure signal to automation.
-
-Recommendation:
-- Track scan failures during discovery and exit with code 3 when any scan failed, even if zero deletions were attempted.
-
----
-
-### 2) High: lock acquisition errors are conflated with normal lock contention
-Why it matters:
-- The lock API currently returns nil for two different conditions: expected contention and unexpected I/O/setup failure.
-
-Evidence:
-- RunLock returns nil when open fails and when flock fails: Sources/WorkSyncCore/RunLock.swift:23-29
-- Sync treats nil as normal "already running" and exits quietly: Sources/worksync/Sync.swift:29-35
-- Purge treats nil similarly: Sources/worksync/Purge.swift:71-74
-
-Risk/impact:
-- Real environmental failures (permissions/filesystem issues) can be silently reported as success.
-
-Recommendation:
-- Change RunLock to return typed outcomes (held vs setup failure), or throw explicit errors.
-- Map setup failures to exit code 3 (retryable runtime failure), while preserving exit-0 behavior for true contention.
-
----
-
-### 3) Medium: purge lock-contention behavior is likely too weak for operator intent
-Why it matters:
-- Purge is an explicit operator action. Returning success when nothing ran may be surprising in scripts.
-
-Evidence:
-- On lock contention, purge prints a message and returns success: Sources/worksync/Purge.swift:71-74
-
-Risk/impact:
-- Automation may interpret lock contention as completed cleanup.
-
-Recommendation:
-- Consider returning exit 3 on purge lock contention so callers can retry explicitly.
-- If current behavior is intentional, document it clearly in SPEC and command help.
-
-## M2 Improvements Confirmed
-These are positive deltas and appear correctly implemented:
-- Reconciliation write/apply path with batch commit and partial-failure reporting:
-  - Sources/WorkSyncCore/SyncEngine.swift
-  - Sources/WorkSyncKit/EventKitStore.swift
-- Source id normalization and validation hardening:
-  - Sources/WorkSyncCore/Config.swift
-- Marker extraction improved for notes-tail edits:
-  - Sources/WorkSyncCore/Marker.swift
-- Purge bounded scan span aligns with EventKit four-year predicate constraint:
-  - Sources/WorkSyncCore/PurgeScan.swift
-- Exit-code mapping centralized and unit-tested:
-  - Sources/WorkSyncCore/ExitCodes.swift
-  - Tests/WorkSyncCoreTests/ExitCodesTests.swift
-
-## Test Coverage Notes
-M2 added solid coverage for new core behavior:
-- apply path and convergence behavior: Tests/WorkSyncCoreTests/SyncEngineTests.swift
-- lock behavior: Tests/WorkSyncCoreTests/RunLockTests.swift
-- purge claim/span rules: Tests/WorkSyncCoreTests/PurgeScanTests.swift
-- exit-code mapping: Tests/WorkSyncCoreTests/ExitCodesTests.swift
-
-Suggested additions for remaining risk:
-- purge command-level tests that assert non-zero exit on partial scan failure
-- lock error path tests that distinguish contention from lock setup failure
-
-## Overall Assessment
-M2 landed substantial and high-quality progress: write path, purge mechanics, locking, and stronger invariants are all in place, and test depth increased significantly.
-
-The key remaining reliability issue is error signaling around purge/locking edge cases. Addressing those will make operational behavior match user expectations and automation needs.
+No release-blocking bugs found in the M3 delta.
