@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.gamov.worksync</string>
+	<key>CFBundleExecutable</key>
+	<string>worksync</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleName</key>
+	<string>WorkSync</string>
+	<key>CFBundleDisplayName</key>
+	<string>WorkSync</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>WorkSync mirrors busy time from your personal calendars onto your work calendar as privacy-safe blocker events. It needs full calendar access to read source calendars and write blockers.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Viktor Gamov</string>
+</dict>
+</plist>

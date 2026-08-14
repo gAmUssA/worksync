@@ -1,0 +1,16 @@
+.build/
+build/
+.DS_Store
+*.xcodeproj
+*.xcworkspace
+.swiftpm/
+
+# The user-global gitignore excludes .github; re-include it for this repo (CI lives there).
+!.github/
+!.github/**
+
+# Never commit signing material.
+*.p12
+*.pem
+*.cer
+*.entitlements.signed

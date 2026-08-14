@@ -1,0 +1,11 @@
+# SwiftFormat configuration (checked by CI: swiftformat --lint .)
+--swiftversion 5.10
+--indent 4
+--maxwidth 120
+--wraparguments before-first
+--wrapcollections before-first
+--stripunusedargs closure-only
+--self remove
+--importgrouping testable-bottom
+--disable wrapMultilineStatementBraces, andOperator
+--exclude .build, build
