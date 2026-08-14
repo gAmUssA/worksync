@@ -1,11 +1,11 @@
 ---
 # worksync-5lsv
 title: 'M4: Menu bar app + login item'
-status: todo
+status: in-progress
 type: milestone
 priority: normal
 created_at: 2026-08-14T00:33:15Z
-updated_at: 2026-08-14T00:33:43Z
+updated_at: 2026-08-14T03:19:21Z
 blocked_by:
     - worksync-xli7
 ---

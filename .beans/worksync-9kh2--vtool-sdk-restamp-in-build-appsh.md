@@ -1,10 +1,11 @@
 ---
 # worksync-9kh2
 title: vtool SDK restamp in build-app.sh
-status: todo
+status: in-progress
 type: task
+priority: normal
 created_at: 2026-08-14T02:25:53Z
-updated_at: 2026-08-14T02:25:53Z
+updated_at: 2026-08-14T03:19:21Z
 parent: worksync-5lsv
 ---
 

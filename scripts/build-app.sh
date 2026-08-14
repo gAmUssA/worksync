@@ -66,6 +66,27 @@ shopt -u nullglob
 cp Resources/Info.plist "$BUNDLE/Contents/Info.plist"
 cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
 
+# SwiftPM stamps LC_BUILD_VERSION's `sdk` field with the DEPLOYMENT TARGET
+# rather than the SDK it actually compiled against. macOS gates modern control
+# appearance on that field, so without this restamp the UI silently renders
+# legacy Aqua controls — no error, nothing to debug (SPEC §3.1 rule 6).
+# Must run BEFORE codesign: restamping afterwards invalidates the signature.
+SDK_VERSION=$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || echo "")
+MIN_VERSION=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" Resources/Info.plist 2>/dev/null || echo "14.0")
+if [[ -n "$SDK_VERSION" ]] && command -v vtool >/dev/null 2>&1; then
+  echo "==> restamping SDK version ($MIN_VERSION -> built against $SDK_VERSION)"
+  APP_BINARY="$BUNDLE/Contents/MacOS/worksync"
+  if vtool -set-build-version macos "$MIN_VERSION" "$SDK_VERSION" -replace \
+      -output "$APP_BINARY.tmp" "$APP_BINARY" 2>/dev/null; then
+    mv "$APP_BINARY.tmp" "$APP_BINARY"
+  else
+    rm -f "$APP_BINARY.tmp"
+    echo "    warning: vtool restamp failed; modern controls may fall back to legacy Aqua" >&2
+  fi
+else
+  echo "    warning: vtool or SDK version unavailable; skipping SDK restamp" >&2
+fi
+
 echo "==> codesign"
 if [[ "$ADHOC" -eq 1 ]]; then
   codesign --force --sign - --timestamp=none \

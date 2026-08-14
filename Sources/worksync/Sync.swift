@@ -67,9 +67,21 @@ struct Sync: ParsableCommand {
         let result = SyncEngine.apply(plan, store: store)
         print(result.summaryLine)
 
+        let logger = Logger(level: config.general.logLevel)
+        logger.info(result.summaryLine)
+
+        // Display state only — reconciliation never reads this back (SPEC §3).
+        LastRunStore.save(LastRun(
+            finishedAt: Date(),
+            succeeded: !result.hasFailures,
+            summary: result.summaryLine,
+            errorMessage: result.failures.first
+        ))
+
         if result.hasFailures {
             for failure in result.failures {
                 FileHandle.standardError.write(Data("error: \(failure)\n".utf8))
+                logger.error(failure)
             }
             // Partial application is safe to re-run: reconciliation is
             // idempotent, so the next pass finishes whatever did not land.

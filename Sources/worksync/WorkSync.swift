@@ -72,16 +72,6 @@ struct Menubar: ParsableCommand {
     }
 }
 
-struct Status: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        abstract: "Managed-event counts per source and last-run info. Arrives in M4."
-    )
-    func run() throws {
-        print("worksync status is not implemented yet (milestone M4).")
-        throw ArgumentParser.ExitCode(ExitCodes.configError)
-    }
-}
-
 struct InstallAgent: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "install-agent",
