@@ -71,3 +71,36 @@ final class RunLockTests: XCTestCase {
         XCTAssertEqual(ExitCodes.code(for: RunLockError.unavailable(path: "/x", code: ENOTDIR)), 3)
     }
 }
+
+final class InstanceLockTests: XCTestCase {
+    func testInstanceLockIsSeparateFromThePassLock() {
+        // They must not collide: the pass lock is taken and released around
+        // each sync, while the instance lock is held for the app's whole life.
+        // Sharing one would mean a running menu bar app blocks every CLI sync.
+        XCTAssertNotEqual(RunLock.instancePath, RunLock.defaultPath)
+    }
+
+    func testHoldingOneDoesNotBlockTheOther() throws {
+        let directory = NSTemporaryDirectory() + "worksync-locks-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+
+        let instance = try RunLock.acquire(path: directory + "/.menubar.lock")
+        XCTAssertNotNil(instance)
+
+        let pass = try RunLock.acquire(path: directory + "/.lock")
+        XCTAssertNotNil(pass, "a running menu bar app must not block a CLI sync")
+
+        pass?.unlock()
+        instance?.unlock()
+    }
+
+    func testTheInstanceLockRefusesASecondHolder() throws {
+        let path = NSTemporaryDirectory() + "worksync-instance-\(UUID().uuidString).lock"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let first = try RunLock.acquire(path: path)
+        XCTAssertNotNil(first)
+        XCTAssertNil(try RunLock.acquire(path: path), "a second menu bar instance must be refused")
+        first?.unlock()
+    }
+}

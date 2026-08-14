@@ -24,6 +24,13 @@ public enum RunLockError: Error, LocalizedError, Equatable {
 public final class RunLock {
     public static let defaultPath = NSString(string: "~/.config/worksync/.lock").expandingTildeInPath
 
+    /// A SEPARATE lock, held for the menu bar app's whole lifetime so a second
+    /// instance cannot start. Deliberately not the pass lock above: that one is
+    /// taken and released around each sync, and a CLI `worksync sync` must
+    /// still be able to run while the menu bar app is alive.
+    public static let instancePath = NSString(string: "~/.config/worksync/.menubar.lock")
+        .expandingTildeInPath
+
     private let descriptor: Int32
     private var released = false
 
