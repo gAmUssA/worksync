@@ -2,80 +2,94 @@
 
 ## Findings (ordered by severity)
 
-### 1) Medium: Doctor remediation names the wrong config file for `--config` users
+### 1) High: Disabling `change_driven` does not stop the existing calendar observer
 **Why it matters**
-The doctor command accepts an explicit config path, but the target-writability remediation always tells the user to edit `ConfigLoader.defaultPath`. A user diagnosing a custom config receives an actionable-looking instruction for a file that is not being used.
+The change observer is started once after a successful pass, but the integration only starts it when `changeObserver == nil` and the current config enables the feature. There is no path that stops the observer when the setting is later turned off, and no path that replaces its policy when the debounce interval changes.
 
 **Evidence**
-- `DoctorInputs` carries the requested config path: [Sources/WorkSyncCore/DoctorChecks.swift](Sources/WorkSyncCore/DoctorChecks.swift#L77-L108)
-- The writability remediation ignores it and uses the default path: [Sources/WorkSyncCore/DoctorChecks.swift](Sources/WorkSyncCore/DoctorChecks.swift#L275-L282)
-- The CLI passes the caller's `--config` path into fact gathering: [Sources/worksync/Doctor.swift](Sources/worksync/Doctor.swift#L53-L75)
-- Existing doctor tests use `/tmp/config.toml` but do not assert the remediation path: [Tests/WorkSyncCoreTests/DoctorTests.swift](Tests/WorkSyncCoreTests/DoctorTests.swift#L24-L48), [Tests/WorkSyncCoreTests/DoctorTests.swift](Tests/WorkSyncCoreTests/DoctorTests.swift#L230-L241)
+- The observer is retained and guarded by `changeObserver == nil`: [Sources/worksync/MenuBar/MenuBarModel.swift](Sources/worksync/MenuBar/MenuBarModel.swift#L252-L260)
+- When the observer already exists, changing `change_driven` to false or changing `change_debounce_seconds` returns without reconfiguration: [Sources/worksync/MenuBar/MenuBarModel.swift](Sources/worksync/MenuBar/MenuBarModel.swift#L252-L258)
+- The observer callback continues to call `calendarDidChange`, which uses the stale retained `changePolicy`: [Sources/worksync/MenuBar/MenuBarModel.swift](Sources/worksync/MenuBar/MenuBarModel.swift#L261-L288)
+- Settings can edit `change_driven` and the config is applied on the next save/pass: [Sources/worksync/MenuBar/SettingsView.swift](Sources/worksync/MenuBar/SettingsView.swift#L120-L136)
 
 **Impact**
-- The diagnostic can send users to edit the wrong configuration file.
-- Fixing the suggested default file will not change the failing custom-config run.
+- Turning off change-driven sync in Settings does not actually turn it off during the current menu-bar process lifetime.
+- Changing the debounce value has no effect until the app is restarted.
+- Users may get unexpected extra sync passes after explicitly disabling the fast path.
 
 **Recommendation**
-Pass `inputs.configPath` into `writabilityCheck` and use it in the remediation, with a regression test using a non-default path.
+Make observer configuration reconcile on every successful pass: stop and clear the observer/timer when disabled; when enabled, restart or update the observer policy when the debounce setting changes. A small `reconfigureChangeObservation(config:)` method should own this lifecycle and be directly tested.
 
 ---
 
-### 2) Medium: Doctor treats an unreadable instance lock as proof that the menu bar is running
+### 2) Medium: The first native notification can be queued before authorization completes
 **Why it matters**
-When the doctor cannot acquire the menu-bar instance lock because of a filesystem or permission error, it returns `menubarRunning = true`. That suppresses the “nothing is scheduled” error and can make the overall scheduling check look healthy even though no running instance was established.
+On the first notification, `UserNotifier.post` calls `requestAuthorizationOnce()` and immediately submits the `UNNotificationRequest`. Authorization is asynchronous, so the request may be added before the user grants permission or before the system has completed the authorization transition. The first expected banner can therefore be lost.
 
 **Evidence**
-- Lock contention and lock setup failure are distinct outcomes: [Sources/WorkSyncCore/RunLock.swift](Sources/WorkSyncCore/RunLock.swift#L50-L72)
-- Doctor maps every lock exception to `menubarRunning = true`: [Sources/worksync/Doctor.swift](Sources/worksync/Doctor.swift#L101-L115)
-- `SchedulingFacts.somethingWillRun` treats that boolean as a real running mechanism: [Sources/WorkSyncCore/DoctorChecks.swift](Sources/WorkSyncCore/DoctorChecks.swift#L10-L31)
-- Existing tests cover synthetic `menubarRunning` values but not the fact-gathering lock-error path: [Tests/WorkSyncCoreTests/DoctorTests.swift](Tests/WorkSyncCoreTests/DoctorTests.swift#L245-L270)
+- Authorization is requested and then the notification is added immediately: [Sources/worksync/MenuBar/UserNotifier.swift](Sources/worksync/MenuBar/UserNotifier.swift#L25-L46)
+- The authorization completion only logs the result and does not retry or submit the pending notification: [Sources/worksync/MenuBar/UserNotifier.swift](Sources/worksync/MenuBar/UserNotifier.swift#L60-L75)
+- Existing tests cover notification policy and AppleScript escaping, but not the native first-authorization/post ordering: [Tests/WorkSyncCoreTests/NotificationTests.swift](Tests/WorkSyncCoreTests/NotificationTests.swift)
 
 **Impact**
-- A broken lock directory can produce a false healthy scheduling diagnosis.
-- The user may not discover that the menu bar app cannot establish its single-instance guard or that the diagnostic could not verify it.
+- With `notify = "always"`, the first completed pass after enabling notifications may not produce the promised native banner.
+- With `notify = "errors"`, the first failure notification may be silently lost, which is the most costly notification to miss.
 
 **Recommendation**
-Represent “unknown” separately from `menubarRunning = true`, and emit a skipped/error finding with the lock failure detail. At minimum, add a diagnostic detail or dedicated check so lock setup failure cannot satisfy the scheduling check silently.
+Make authorization completion part of the delivery flow: request authorization once, then add the pending request only after authorization succeeds. If authorization is denied, log it and let doctor surface the remediation. Preserve best-effort semantics so notification failure never fails the sync pass.
+
+---
+
+### 3) Medium: EventKit change observer behavior is not covered by an EventKit-backed runtime test
+**Why it matters**
+The pure debounce and echo policy is well tested, but the actual observer registration, object filtering, callback delivery, start/stop lifecycle, and app-run-loop interaction are not exercised in CI.
+
+**Evidence**
+- The EventKit adapter registers `.EKEventStoreChanged` against a retained store: [Sources/WorkSyncKit/EventKitChangeObserver.swift](Sources/WorkSyncKit/EventKitChangeObserver.swift#L12-L43)
+- Tests cover only the pure trigger policy and write classification: [Tests/WorkSyncCoreTests/ChangeTriggerTests.swift](Tests/WorkSyncCoreTests/ChangeTriggerTests.swift)
+- The observer is injected into the UI model, but no test drives the model’s observer lifecycle: [Sources/worksync/MenuBar/MenuBarModel.swift](Sources/worksync/MenuBar/MenuBarModel.swift#L101-L120)
+
+**Impact**
+- A registration or run-loop regression can silently disable the fast path while all unit tests remain green.
+- The fallback timer still masks the issue, making this particularly difficult to detect from normal behavior.
+
+**Recommendation**
+Add a fake-observer/menu-model integration test for enable, debounce re-arm, echo suppression, disable, and reconfiguration. Separately keep a manual bundle-launched checklist item for a real Calendar.app edit producing a change-driven pass.
 
 ## Residual Risks
 
-### Medium: Doctor’s environment-facing path is not covered by integration tests
-The pure `DoctorChecks` judgment is extensively tested, but `DoctorFacts.gather` still shells out to `launchctl`/`codesign` and queries EventKit/UserNotifications. Bundle-launched runtime checks are needed to verify that real macOS states map to the intended findings and do not prompt.
+### Low: Notification delivery is intentionally best effort
+The notifier correctly does not turn banner failure into sync failure, and the AppleScript fallback is escaped and tested. The remaining concern is specifically the first-run authorization ordering, not the best-effort contract itself.
 
-### Low: Health refresh runs during menu-bar startup before the instance lock is claimed
-`MenuBarModel` refreshes health during initialization, while `AppDelegate` claims the single-instance lock immediately before creating the model. The initial scheduling finding can therefore report that the menu bar is absent before the app has claimed its lock; later pass/refresh activity corrects it, but the first displayed health state can be transiently misleading.
+### Low: The observer is intentionally started only after a successful pass
+This avoids pretending the fast path works before calendar access is granted, but it means a failed initial pass will not establish change-driven observation. That is reasonable because the timer remains the guarantee; it should remain documented in the user-facing troubleshooting flow.
 
-## Snapshot (M7 Delta)
-- Review type: Delta review from the prior M6 anchor
-- Baseline commit: `553e7bc83b9df57660ca4df6de92b6cdb8b8fa4a` (`553e7bc`)
-- Current commit reviewed: `e50a66afe4476e69fe1c22fc003953c6d6d238b4` (`e50a66a`)
-- Main feature commit in this delta: `a5a1660` - `worksync doctor` and health surfacing
-- Related fixes included in the delta:
-  - `cf1c294` - source-ID rename draft flow and comment-loss reporting
-  - `9a172f4` - locale-independent log timestamps
-  - `e50a66a` - Gregorian `{date}` rendering with localized `{weekday}`
+## Snapshot (M7 Change-Driven + Notifications Delta)
+- Review type: Delta review from the previous M7 doctor/health review
+- Baseline commit: `e50a66afe4476e69fe1c22fc003953c6d6d238b4` (`e50a66a`)
+- Current commit reviewed: `c49b9e077309bcefd7409a433acc92b29256bb4c` (`c49b9e0`)
+- Main implementation commit: `c49b9e0` - change-driven sync and desktop notifications
+- Related doctor correction included in the delta: `e7b5cf3`
 - Working tree at review time: clean
 - Review date: 2026-08-14
 
 ## Scope Reviewed
-- doctor report model, severity/exit-code rules, text/JSON rendering
-- read-only environmental fact gathering
-- calendar access and resolution diagnostics
-- scheduling, signing, notification, staleness, and log checks
-- menu-bar health display and destinations
-- M6 rename-flow fix and config-writer warning integration
-- locale/date correctness updates
+- debounce and own-write echo suppression
+- EventKit change observer registration/lifecycle
+- menu-bar observer integration and re-triggering
+- notification policy for off/errors/always modes
+- native UserNotifications authorization and AppleScript fallback
+- notification/doctor documentation and test coverage
 
 ## Verification Run
 - `swift test`: **187 tests, 0 failures**
 
 ## Improvements Confirmed
-- Doctor shares the existing exit-code mapping and remains read-only: [Sources/WorkSyncCore/Doctor.swift](Sources/WorkSyncCore/Doctor.swift), [Sources/WorkSyncCore/DoctorChecks.swift](Sources/WorkSyncCore/DoctorChecks.swift)
-- Permission states, write-only access, downstream skipped checks, resolution aggregation, notification states, JSON output, and strict mode have focused tests: [Tests/WorkSyncCoreTests/DoctorTests.swift](Tests/WorkSyncCoreTests/DoctorTests.swift)
-- The M6 saved-source rename defect is addressed with a draft/commit model: [Sources/WorkSyncCore/SourceIDDraft.swift](Sources/WorkSyncCore/SourceIDDraft.swift), [Sources/worksync/MenuBar/MenuBarModel.swift](Sources/worksync/MenuBar/MenuBarModel.swift)
-- Config writer comment-loss is now surfaced as a save warning rather than silently hidden: [Sources/WorkSyncCore/ConfigWriter.swift](Sources/WorkSyncCore/ConfigWriter.swift)
-- Log timestamps are pinned to POSIX/Gregorian formatting while user-facing doctor dates remain localized: [Sources/WorkSyncCore/Logger.swift](Sources/WorkSyncCore/Logger.swift), [Sources/WorkSyncCore/DoctorChecks.swift](Sources/WorkSyncCore/DoctorChecks.swift)
+- Change-trigger policy is pure and tests debounce, re-arming, zero delay, and five-second echo suppression: [Sources/WorkSyncCore/ChangeTrigger.swift](Sources/WorkSyncCore/ChangeTrigger.swift), [Tests/WorkSyncCoreTests/ChangeTriggerTests.swift](Tests/WorkSyncCoreTests/ChangeTriggerTests.swift)
+- `ApplyResult.wroteAnything` correctly distinguishes real writes from unchanged/skipped passes for echo suppression: [Sources/WorkSyncCore/SyncEngine.swift](Sources/WorkSyncCore/SyncEngine.swift)
+- Notification policy correctly handles off/errors/always, partial writes, lock skips, and error sounds: [Sources/WorkSyncCore/Notifications.swift](Sources/WorkSyncCore/Notifications.swift), [Tests/WorkSyncCoreTests/NotificationTests.swift](Tests/WorkSyncCoreTests/NotificationTests.swift)
+- AppleScript fallback escaping covers quotes, backslashes, and newlines.
+- Doctor correction avoids treating uncheckable health state as healthy.
 
 ## Assessment
-The M7 doctor core is well-designed and unusually well-tested for its pure decision layer. The two medium findings are diagnostic correctness issues: custom-config remediation can point at the wrong file, and lock inspection failure can be mistaken for a healthy running menu-bar instance. Fix those before treating health reporting as fully trustworthy.
+The M7 policy layers are strong and well-tested, but the runtime lifecycle has two important issues: change-driven configuration is not dynamically reconfigured, and first-run native notification delivery can race authorization. Fix those before treating change-driven sync and notifications as complete.

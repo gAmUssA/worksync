@@ -60,3 +60,47 @@ public struct ChangeTriggerPolicy: Equatable, Sendable {
         debounceSeconds >= 0
     }
 }
+
+/// What to do with the change observer given the current config.
+///
+/// A pure reconciliation rather than a one-shot "start if enabled", because
+/// `change_driven` and `change_debounce_seconds` are both editable in the
+/// settings screen while the app is running. Starting once and never revisiting
+/// it means turning the feature off does not turn it off — the observer keeps
+/// firing passes for the rest of the process lifetime, which looks exactly like
+/// the app ignoring the user (SPEC §11.1: a setting that does not take effect
+/// is worse than one that does not exist).
+///
+/// Lives here rather than in the menu bar so the lifecycle is directly
+/// testable: the model holds the observer, but this decides what should happen
+/// to it.
+public enum ChangeObservationPlan: Equatable, Sendable {
+    case start(ChangeTriggerPolicy)
+    case stop
+    /// Same observer, new debounce. The notification carries no payload, so a
+    /// debounce change needs no re-registration — and re-registering would
+    /// open a window in which changes are missed for no reason.
+    case updatePolicy(ChangeTriggerPolicy)
+    case doNothing
+
+    /// - Parameter hasCompletedAPass: gates *starting* only. A successful pass
+    ///   is the proof that calendar access is granted; observing before that
+    ///   registers something that can never fire and reports itself as working
+    ///   (SPEC §11.2). Stopping is never gated — a user turning the feature off
+    ///   must be obeyed immediately, whatever else is true.
+    public static func reconcile(
+        config: Config,
+        observing: Bool,
+        currentPolicy: ChangeTriggerPolicy?,
+        hasCompletedAPass: Bool
+    ) -> ChangeObservationPlan {
+        guard config.general.changeDriven else {
+            return observing ? .stop : .doNothing
+        }
+        let desired = ChangeTriggerPolicy(config: config)
+        guard observing else {
+            return hasCompletedAPass ? .start(desired) : .doNothing
+        }
+        return currentPolicy == desired ? .doNothing : .updatePolicy(desired)
+    }
+}

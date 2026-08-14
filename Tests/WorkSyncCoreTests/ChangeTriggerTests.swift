@@ -80,6 +80,141 @@ final class ChangeTriggerPolicyTests: XCTestCase {
     }
 }
 
+/// The lifecycle the observer goes through while the app is running.
+///
+/// `change_driven` and `change_debounce_seconds` are both editable in the
+/// settings screen, so "start it once after the first pass" is not enough:
+/// without reconciliation, turning the feature off leaves it running for the
+/// rest of the process lifetime.
+final class ChangeObservationPlanTests: XCTestCase {
+    private func config(driven: Bool, debounce: Int = 20) -> Config {
+        var general = GeneralConfig()
+        general.changeDriven = driven
+        general.changeDebounceSeconds = debounce
+        return Config(
+            general: general,
+            target: TargetConfig(account: "Work", calendar: "Calendar"),
+            sources: [SourceConfig(id: "personal", account: "iCloud", calendar: "Personal")]
+        )
+    }
+
+    private func reconcile(
+        driven: Bool,
+        debounce: Int = 20,
+        observing: Bool,
+        currentPolicy: ChangeTriggerPolicy? = nil,
+        hasCompletedAPass: Bool = true
+    ) -> ChangeObservationPlan {
+        ChangeObservationPlan.reconcile(
+            config: config(driven: driven, debounce: debounce),
+            observing: observing,
+            currentPolicy: currentPolicy,
+            hasCompletedAPass: hasCompletedAPass
+        )
+    }
+
+    // MARK: Starting
+
+    func testStartsWhenEnabledAfterASuccessfulPass() {
+        XCTAssertEqual(reconcile(driven: true, observing: false), .start(ChangeTriggerPolicy(debounceSeconds: 20)))
+    }
+
+    func testDoesNotStartBeforeAnyPassHasSucceeded() {
+        // A successful pass is the proof that access is granted. Observing
+        // earlier registers something that can never fire while reporting
+        // itself as working.
+        XCTAssertEqual(reconcile(driven: true, observing: false, hasCompletedAPass: false), .doNothing)
+    }
+
+    func testDoesNotStartWhenDisabled() {
+        XCTAssertEqual(reconcile(driven: false, observing: false), .doNothing)
+    }
+
+    func testDoesNotRestartAnObserverThatIsAlreadyRunning() {
+        XCTAssertEqual(
+            reconcile(driven: true, observing: true, currentPolicy: ChangeTriggerPolicy(debounceSeconds: 20)),
+            .doNothing
+        )
+    }
+
+    // MARK: Stopping — the regression this exists for
+
+    func testTurningTheSettingOffStopsAnObserverAlreadyRunning() {
+        // The bug: the observer was started once and never revisited, so
+        // switching "React to calendar changes" off did nothing until the app
+        // was restarted, and passes kept firing.
+        XCTAssertEqual(
+            reconcile(driven: false, observing: true, currentPolicy: ChangeTriggerPolicy(debounceSeconds: 20)),
+            .stop
+        )
+    }
+
+    func testStoppingIsNotGatedOnAPassHavingSucceeded() {
+        // Starting is gated; stopping never is. A user turning the feature off
+        // must be obeyed regardless of what else is true.
+        XCTAssertEqual(
+            reconcile(driven: false, observing: true, hasCompletedAPass: false),
+            .stop
+        )
+    }
+
+    // MARK: Reconfiguring
+
+    func testChangingTheDebounceUpdatesThePolicyWithoutRestarting() {
+        // The notification carries no payload, so a debounce change needs no
+        // re-registration — and re-registering would open a window in which
+        // changes go unseen for no reason.
+        XCTAssertEqual(
+            reconcile(
+                driven: true, debounce: 45, observing: true,
+                currentPolicy: ChangeTriggerPolicy(debounceSeconds: 20)
+            ),
+            .updatePolicy(ChangeTriggerPolicy(debounceSeconds: 45))
+        )
+    }
+
+    func testAnUnchangedDebounceIsNotChurned() {
+        XCTAssertEqual(
+            reconcile(
+                driven: true, debounce: 20, observing: true,
+                currentPolicy: ChangeTriggerPolicy(debounceSeconds: 20)
+            ),
+            .doNothing
+        )
+    }
+
+    // MARK: Sequences
+
+    func testAFullOnOffOnCycleSettles() {
+        // Walks the states the settings screen can actually produce.
+        var observing = false
+        var policy: ChangeTriggerPolicy?
+
+        func apply(_ plan: ChangeObservationPlan) {
+            switch plan {
+            case let .start(p): observing = true; policy = p
+            case let .updatePolicy(p): policy = p
+            case .stop: observing = false; policy = nil
+            case .doNothing: break
+            }
+        }
+
+        apply(reconcile(driven: true, observing: observing, currentPolicy: policy))
+        XCTAssertTrue(observing)
+
+        apply(reconcile(driven: false, observing: observing, currentPolicy: policy))
+        XCTAssertFalse(observing, "off must actually stop it")
+        XCTAssertNil(policy, "a stopped observer must not keep a stale policy")
+
+        apply(reconcile(driven: true, debounce: 30, observing: observing, currentPolicy: policy))
+        XCTAssertTrue(observing, "and it must come back on")
+        XCTAssertEqual(policy?.debounceSeconds, 30, "with the debounce as configured now")
+
+        // Settled: reconciling again changes nothing.
+        XCTAssertEqual(reconcile(driven: true, debounce: 30, observing: observing, currentPolicy: policy), .doNothing)
+    }
+}
+
 /// Echo suppression keys off this, so what counts as "wrote" is load-bearing.
 final class ApplyResultWroteAnythingTests: XCTestCase {
     func testCreatesUpdatesAndDeletesAllCount() {

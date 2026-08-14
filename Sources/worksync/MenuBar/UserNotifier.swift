@@ -12,11 +12,26 @@ import WorkSyncCore
 /// posts through Script Editor's own bundle, which has its own grant.
 final class UserNotifier: Notifier, @unchecked Sendable {
     private let logger: Logger
-    /// Requested once, lazily, the first time something is actually worth
-    /// showing — never at launch. Asking for notification permission before
-    /// there is anything to notify about is how an app gets denied by reflex.
-    private var authorizationRequested = false
     private let lock = NSLock()
+
+    /// Authorization is requested once, lazily, the first time something is
+    /// actually worth showing — never at launch. Asking before there is
+    /// anything to notify about is how an app gets denied by reflex.
+    private enum Authorization {
+        case notYetAsked
+        /// The prompt is up. Anything posted meanwhile has to wait, not race.
+        case asking
+        case granted
+        case denied
+    }
+
+    private var authorization: Authorization = .notYetAsked
+    /// Notifications posted while the prompt is still up. Delivered once the
+    /// answer arrives rather than dropped: the first notification after
+    /// enabling the feature is often the interesting one, and under the
+    /// default `notify = "errors"` it is by definition a failure — the most
+    /// costly banner to lose.
+    private var deferred: [PassNotification] = []
 
     init(logger: Logger) {
         self.logger = logger
@@ -27,8 +42,30 @@ final class UserNotifier: Notifier, @unchecked Sendable {
             postViaAppleScript(notification)
             return
         }
-        requestAuthorizationOnce()
 
+        lock.lock()
+        switch authorization {
+        case .granted:
+            lock.unlock()
+            deliver(notification)
+        case .denied:
+            lock.unlock()
+            // Deliberately NOT falling back to AppleScript here: osascript
+            // would post through Script Editor's own grant, which is a way of
+            // showing a banner to someone who declined banners.
+            logger.debug("notification suppressed: authorization denied")
+        case .asking:
+            deferred.append(notification)
+            lock.unlock()
+        case .notYetAsked:
+            authorization = .asking
+            deferred.append(notification)
+            lock.unlock()
+            requestAuthorization()
+        }
+    }
+
+    private func deliver(_ notification: PassNotification) {
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.body = notification.body
@@ -57,20 +94,34 @@ final class UserNotifier: Notifier, @unchecked Sendable {
         Bundle.main.bundleIdentifier != nil
     }
 
-    private func requestAuthorizationOnce() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !authorizationRequested else { return }
-        authorizationRequested = true
-
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { [logger] granted, error in
+    /// Asks once, then releases whatever was posted while the prompt was up.
+    ///
+    /// The release is the point. `add(_:)` on an unauthorized centre does not
+    /// queue the request for later — it fails — so posting immediately after
+    /// calling `requestAuthorization` loses the notification whenever the user
+    /// has not answered yet, which is exactly the first one.
+    private func requestAuthorization() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { [weak self] granted, error in
+            guard let self else { return }
             if let error {
                 logger.debug("notification authorization failed: \(error.localizedDescription)")
             } else if !granted {
-                // Logged rather than retried: asking again on every pass would
-                // be nagging, and `worksync doctor` reports this state with a
-                // remediation the user can act on when they choose to.
+                // Logged rather than re-asked: prompting again on every pass
+                // would be nagging, and `worksync doctor` reports this state
+                // with a remediation for when the user changes their mind.
                 logger.info("notifications denied; run `worksync doctor` for how to enable them")
+            }
+
+            lock.lock()
+            authorization = granted ? .granted : .denied
+            let waiting = deferred
+            deferred = []
+            let allowed = granted
+            lock.unlock()
+
+            guard allowed else { return }
+            for notification in waiting {
+                deliver(notification)
             }
         }
     }

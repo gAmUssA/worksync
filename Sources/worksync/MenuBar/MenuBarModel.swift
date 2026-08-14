@@ -95,6 +95,8 @@ final class MenuBarModel {
     private var changeTimer: Timer?
     /// When a pass last actually wrote something, for echo suppression.
     private var lastWriteAt: Date?
+    /// Gates *starting* observation: a successful pass proves calendar access.
+    private var hasCompletedAPass = false
 
     static let pausedKey = "io.gamov.worksync.paused"
 
@@ -222,7 +224,8 @@ final class MenuBarModel {
             }
             // Only now: a successful pass is proof access is granted, which is
             // what makes starting the observer meaningful (SPEC §11.2).
-            startObservingChangesIfEnabled()
+            hasCompletedAPass = true
+            reconcileChangeObservation()
         case .skippedLocked:
             break // not news; the other holder is doing this same work
         case let .failed(message):
@@ -249,23 +252,56 @@ final class MenuBarModel {
     /// Called only after a successful pass, so access is known-granted rather
     /// than assumed — starting earlier would register an observer that can
     /// never fire and report itself as working (SPEC §11.2).
-    private func startObservingChangesIfEnabled() {
-        guard changeObserver == nil,
-              let config = try? ConfigLoader.load(path: configPath),
-              config.general.changeDriven else { return }
+    /// Brings observation in line with the config as it is right now.
+    ///
+    /// Called after every pass and after every settings save, because both
+    /// `change_driven` and `change_debounce_seconds` are editable while the app
+    /// is running. Reconciling rather than starting once is what makes turning
+    /// the feature off actually turn it off.
+    func reconcileChangeObservation() {
+        guard let config = try? ConfigLoader.load(path: configPath) else { return }
 
-        let policy = ChangeTriggerPolicy(config: config)
-        changePolicy = policy
-        let observer = makeChangeObserver()
-        changeObserver = observer
-        observer.start { [weak self] in
-            // Notifications arrive on an arbitrary queue; everything below
-            // touches main-actor state (SPEC §3.1 rule 4).
-            Task { @MainActor [weak self] in
-                self?.calendarDidChange()
+        switch ChangeObservationPlan.reconcile(
+            config: config,
+            observing: changeObserver != nil,
+            currentPolicy: changePolicy,
+            hasCompletedAPass: hasCompletedAPass
+        ) {
+        case .doNothing:
+            break
+
+        case let .start(policy):
+            changePolicy = policy
+            let observer = makeChangeObserver()
+            changeObserver = observer
+            observer.start { [weak self] in
+                // Notifications arrive on an arbitrary queue; everything below
+                // touches main-actor state (SPEC §3.1 rule 4).
+                Task { @MainActor [weak self] in
+                    self?.calendarDidChange()
+                }
             }
+            logger.info("change-driven sync enabled (debounce \(policy.debounceSeconds)s)")
+
+        case let .updatePolicy(policy):
+            changePolicy = policy
+            // A timer already armed under the old debounce would otherwise
+            // fire at the old interval once more.
+            changeTimer?.invalidate()
+            changeTimer = nil
+            logger.info("change-driven debounce now \(policy.debounceSeconds)s")
+
+        case .stop:
+            changeObserver?.stop()
+            changeObserver = nil
+            changePolicy = nil
+            // Without this, a pass already scheduled before the user turned
+            // the feature off still fires afterwards — the one sync they
+            // explicitly asked not to happen.
+            changeTimer?.invalidate()
+            changeTimer = nil
+            logger.info("change-driven sync disabled")
         }
-        logger.info("change-driven sync enabled (debounce \(policy.debounceSeconds)s)")
     }
 
     private func calendarDidChange() {
@@ -609,6 +645,10 @@ extension MenuBarModel {
             saveWarning = outcome.warning
             savedSourceIDs = Set(config.sources.map(\.id))
             configError = nil
+            // Immediately, not at the next pass: a user who just switched
+            // "React to calendar changes" off expects it off now, and with a
+            // long interval the next pass could be many minutes away.
+            reconcileChangeObservation()
             // Config is re-read at the start of every pass, so the change takes
             // effect on the next sync with no restart.
             closeSettings()
