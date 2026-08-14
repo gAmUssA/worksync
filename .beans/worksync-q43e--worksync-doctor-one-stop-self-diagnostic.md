@@ -3,32 +3,30 @@
 title: worksync doctor — one-stop self diagnostic
 status: draft
 type: epic
+priority: normal
 created_at: 2026-08-14T03:10:50Z
-updated_at: 2026-08-14T03:10:50Z
+updated_at: 2026-08-14T03:37:43Z
 ---
 
 One command that checks everything that can quietly go wrong, so "why didn't my change sync?" has a first stop that is not guesswork.
 
-Most of the candidate checks below come from failures actually hit while building M1-M3, which is the argument for the feature: each one cost real debugging time and each is mechanically detectable.
+Design settled after studying brew/flutter/gh/npm/mise doctor commands (all run locally, exit codes observed rather than assumed).
 
-## Candidate checks (to be ranked by the research pass)
-- [ ] Calendar TCC authorization: fullAccess vs writeOnly vs denied vs notDetermined. The writeOnly tier silently returns zero events from every query — this one blocked M1 for an hour.
-- [ ] config.toml exists, parses, validates
-- [ ] Every configured account + calendar resolves (catches typos), and each target calendar is writable
-- [ ] source == target feedback-loop guard holds
-- [ ] Login item / launchd agent registered and enabled
-- [ ] A worksync process is actually alive (SPEC §11.2 operational note: nothing syncs unless something is running, and this is more often the cause than any reconciliation bug)
-- [ ] Last successful sync timestamp, and whether it is stale relative to interval_minutes
-- [ ] Log file present, written, rotating, not enormous
-- [ ] Bundle signature: designated requirement is NOT a bare cdhash. An ad-hoc signature resets the calendar grant on every rebuild, which presents as "permissions randomly broke again".
-- [ ] Notification authorization status
-- [ ] Stale run lock
-- [ ] Managed-event count per target calendar
+## Structural decision, make this first
+Define the check result as a value type in WorkSyncCore with `severity`, `title`, `detail`, `remediation`. Every check returns one. Homebrew had to retrofit exactly this (PR #23044) before `--json` was possible, and it is what keeps checks unit-testable against the in-memory fake with no TCC grant in CI.
 
-## Open questions for the research pass
-- [ ] Severity model: which failures are fatal vs advisory, and does the command exit non-zero on advisory findings? (brew doctor and flutter doctor differ here.)
-- [ ] Default verbosity: show every check, or only problems?
-- [ ] --json for scripting?
-- [ ] Remediation text: every failure must print the fix, not just the symptom.
+## Severity and exit codes — reuse the existing four, add none
+- 0: no errors (warnings may print)
+- 2: calendar access not fullAccess. HIGHEST PRECEDENCE — without it every calendar check is unknowable rather than failing
+- 1: config missing/unparseable/invalid, or a calendar that does not resolve
+- 3: a check itself blew up
+Warnings NEVER change the exit code. `--strict` promotes them to 1 for CI — deliberate opt-in, unlike brew doctor which exits 1 on anything at all (verified: 4 cosmetic warnings -> exit 1). flutter doctor exits 0 even with a hard [x] (verified) because ExitStatus never reaches the process exit code.
+Borrow flutter's `notAvailable`: when access is denied, downstream checks are "skipped (needs calendar access)", not failed — one root cause instead of five symptoms.
 
-Research agent dispatched to study brew/flutter/gh/npm doctor conventions before this is broken into tasks.
+## Output
+Two levels: one headline line per check with a leading glyph, then indented detail lines with their own glyphs. Glyph carries severity; colour is redundant decoration (pipe-safe). Findings on STDOUT — brew doctor writes everything to stderr, so `brew doctor | grep` returns nothing. Default prints passing checks too: with ~10 checks green lines are the difference between "everything else is fine" and "everything else was skipped". `-v` adds detail; `--json` from day one.
+
+## Hard rules
+- No check without a remediation the user can execute (npm's own TODO says this and they still shipped checks without one)
+- No check that can be wrong on a healthy machine. npm doctor scored 100% false positives here (2 of 2)
+- Fast and local: no network, no full calendar scan
