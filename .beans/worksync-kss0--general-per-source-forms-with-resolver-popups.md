@@ -5,7 +5,7 @@ status: todo
 type: feature
 priority: normal
 created_at: 2026-08-14T00:35:51Z
-updated_at: 2026-08-14T00:36:15Z
+updated_at: 2026-08-14T02:25:52Z
 parent: worksync-o7n2
 blocked_by:
     - worksync-r61a
@@ -18,3 +18,7 @@ SPEC §11.1. Forms:
 - [ ] Resolver-backed popups for every account/calendar field, fed by the worksync calendars enumeration (a popup cannot typo)
 - [ ] Per-source form: every source field incl. toggles and minute knobs
 - [ ] Save through the shared config writer only — no UI-only write path
+
+
+## Note
+Forms now live in the panel's settings screen, not a window (SPEC §11.1).
