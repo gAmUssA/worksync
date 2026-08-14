@@ -1,11 +1,11 @@
 ---
 # worksync-o7n2
 title: 'M6: Config editor window'
-status: todo
+status: in-progress
 type: milestone
 priority: normal
 created_at: 2026-08-14T00:33:15Z
-updated_at: 2026-08-14T00:33:43Z
+updated_at: 2026-08-14T04:30:56Z
 blocked_by:
     - worksync-5lsv
 ---
