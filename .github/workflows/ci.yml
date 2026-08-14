@@ -39,7 +39,13 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build-test
-    runs-on: macos-15
+    # macOS 26 deliberately, unlike build-test above: build-app.sh stamps the
+    # binary with the SDK it compiled against, and macOS gates modern control
+    # appearance on that stamp. Releasing from macos-15 would ship an app whose
+    # UI silently falls back to legacy Aqua. build-test stays on macos-15 on
+    # purpose, as the older toolchain that catches SDK-gated code (it already
+    # caught one such break).
+    runs-on: macos-26
     permissions:
       contents: write
     steps:
@@ -50,17 +56,36 @@ jobs:
       - name: Build release bundle (ad-hoc signed)
         run: scripts/build-app.sh --adhoc
 
+      # The tag is the source of truth for the version; a mismatch means the
+      # artifact would claim a different version than the release page.
+      - name: Version matches the tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PLIST=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+          if [ "$TAG" != "$PLIST" ]; then
+            echo "tag $TAG != Info.plist $PLIST — bump Resources/Info.plist before tagging" >&2
+            exit 1
+          fi
+
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: build/WorkSync-*.tar.gz
+          generate_release_notes: true
+          body: |
+            Built on macOS 26 so the UI gets modern controls.
 
-  # Temporary probe: does a macOS 26 runner exist, and what SDK does it carry?
-  # The release job's SDK decides whether shipped builds get modern controls.
-  probe-sdk:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-26
-    steps:
-      - run: |
-          swift --version
-          xcrun --sdk macosx --show-sdk-version
+            **This build is ad-hoc signed** — the CI runner has no signing
+            identity. It works, but macOS forgets your calendar permission on
+            every update. Re-sign once with your own certificate to fix that
+            permanently; see the README section on Signing.
+
+            Download with `curl`, not a browser: browser downloads are
+            quarantined and this app is not notarized.
+
+            ```
+            curl -L -o worksync.tar.gz \
+              https://github.com/gAmUssA/worksync/releases/latest/download/WorkSync-${{ github.ref_name }}-arm64.tar.gz
+            tar xzf worksync.tar.gz
+            ```
+
