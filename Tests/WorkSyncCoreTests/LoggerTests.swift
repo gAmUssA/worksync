@@ -89,6 +89,54 @@ final class LoggerTests: XCTestCase {
         logger.info("FINAL-LINE")
         XCTAssertTrue(contents(logPath).contains("FINAL-LINE"), "the live log holds the newest entries")
     }
+
+    // MARK: Timestamps
+
+    /// Log timestamps are machine-readable, so they must not follow the user's
+    /// calendar. An unconfigured DateFormatter inherits `Locale.current`, and
+    /// the same instant then writes as 2569-… under a Thai system calendar or
+    /// 0008-… under a Japanese one — which silently breaks sorting, parsing,
+    /// and every "when did this run" question. Invisible on an en_US machine,
+    /// which is exactly why it needs a test.
+    func testTimestampsAreGregorianRegardlessOfTheSystemCalendar() {
+        // Asserted on the formatter's configuration, not on its output: CI runs
+        // under en_US, where the broken and fixed versions print identically.
+        // Only a Thai or Japanese system calendar shows the difference, so the
+        // pinning is the only thing a test here can actually hold on to.
+        XCTAssertEqual(Logger.timestampFormatter.locale.identifier, "en_US_POSIX")
+        XCTAssertEqual(Logger.timestampFormatter.calendar.identifier, .gregorian)
+
+        // And the pinning does what it is for: the same instant renders the
+        // same way it would for a user whose calendar is not Gregorian.
+        let instant = Date(timeIntervalSince1970: 1_770_000_000)
+        XCTAssertTrue(
+            Logger.timestampFormatter.string(from: instant).hasPrefix("2026-"),
+            "got \(Logger.timestampFormatter.string(from: instant))"
+        )
+    }
+
+    func testTheTimestampFormatterIsBuiltOnceRatherThanPerLine() {
+        // DateFormatter is among the most expensive objects in Foundation to
+        // construct, and this used to happen on every single log line.
+        XCTAssertTrue(Logger.timestampFormatter === Logger.timestampFormatter)
+    }
+
+    func testTimestampsUseAFixedSortableLayout() {
+        // Sortable as plain text is the property that makes `sort` and `grep`
+        // on the log file work at all.
+        let logger = Logger(directory: directory, level: .info)
+        logger.info("hello")
+
+        let stamp = String(contents(logPath).prefix(19))
+        XCTAssertEqual(
+            stamp.count, 19,
+            "expected yyyy-MM-dd HH:mm:ss, got \"\(stamp)\""
+        )
+        XCTAssertNotNil(
+            try? Date("\(stamp.replacingOccurrences(of: " ", with: "T"))Z", strategy: .iso8601),
+            "\"\(stamp)\" does not parse as an ISO-shaped timestamp"
+        )
+    }
 }
 
 final class LastRunTests: XCTestCase {

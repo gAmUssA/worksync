@@ -97,7 +97,7 @@ public struct DoctorInputs {
         notifications: NotificationFacts = .notApplicable,
         lastRun: LastRun? = nil,
         logBytes: Int? = nil,
-        now: Date = Date()
+        now: Date = .now
     ) {
         self.configPath = configPath
         self.config = config
@@ -347,10 +347,10 @@ public enum DoctorChecks {
             return .skipped(id: id, title, because: "no sync has run yet")
         }
         let age = inputs.now.timeIntervalSince(lastRun.finishedAt)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        let when = formatter.string(from: lastRun.finishedAt)
+        // Localized by construction, and no formatter instance to manage. This
+        // one IS meant to read in the user's own conventions — unlike the log
+        // timestamps, which are fixed-format on purpose.
+        let when = lastRun.finishedAt.formatted(date: .abbreviated, time: .shortened)
 
         guard age > stalenessThreshold(intervalMinutes: config?.general.intervalMinutes ?? 10) else {
             return .ok(id: id, title, detail: ["last run \(when): \(lastRun.summary)"])
@@ -415,13 +415,16 @@ public enum DoctorChecks {
         guard let bytes = inputs.logBytes else {
             return .skipped(id: id, title, because: "no log file yet")
         }
-        let megabytes = String(format: "%.1f", Double(bytes) / 1024 / 1024)
+        // The purpose-built style: picks the unit, localizes the separator, and
+        // matches how Finder reports the same file — so the number the user
+        // reads here is the one they can go and check.
+        let size = bytes.formatted(.byteCount(style: .file))
         guard bytes > logSizeWarningBytes else {
-            return .ok(id: id, title, detail: ["\(megabytes) MB"])
+            return .ok(id: id, title, detail: [size])
         }
         return .warning(
             id: id, title,
-            detail: ["\(megabytes) MB — the log rotates at 1 MB, so rotation is not running"],
+            detail: ["\(size) — the log rotates at 1 MB, so rotation is not running"],
             remediation: "Delete \(Logger.defaultDirectory)/worksync.log and re-run; "
                 + "if it grows again, file a bug."
         )
