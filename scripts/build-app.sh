@@ -48,6 +48,17 @@ fi
 
 VERSION=$(git describe --tags --always 2>/dev/null || echo "0.1.0-dev")
 
+# The version lives in two files and CI only checks the plist against the tag,
+# so a bump that misses the Swift constant ships a binary whose --version
+# disagrees with the bundle it is inside — and nothing downstream notices.
+PLIST_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+SOURCE_VERSION=$(sed -n 's/^let worksyncVersion = "\(.*\)"$/\1/p' Sources/worksync/WorkSync.swift)
+if [[ "$PLIST_VERSION" != "$SOURCE_VERSION" ]]; then
+  echo "error: version mismatch — Info.plist says $PLIST_VERSION, WorkSync.swift says $SOURCE_VERSION" >&2
+  echo "       bump both before building a release." >&2
+  exit 1
+fi
+
 echo "==> swift build -c release"
 swift build -c release
 
