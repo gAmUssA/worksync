@@ -265,6 +265,42 @@ Signing to *Always Trust*.
 resulting designated requirement is still a bare hash — a silent failure here
 would surface weeks later as "permissions randomly broke again".
 
+A self-signed certificate fixes the permission problem on *your* machine, but
+Gatekeeper still refuses the app on anyone else's. Only a Developer ID
+certificate plus notarization fixes that.
+
+### Releasing notarized builds
+
+The release workflow signs and notarizes when these five repository secrets
+exist, and falls back to an ad-hoc build (with a warning) when they don't:
+
+| Secret | Where it comes from |
+| --- | --- |
+| `DEVELOPER_ID_P12_BASE64` | your Developer ID Application cert, exported |
+| `DEVELOPER_ID_P12_PASSWORD` | the password you set on that export |
+| `AC_API_KEY_ID` | App Store Connect API key ID |
+| `AC_API_ISSUER_ID` | App Store Connect issuer ID (a UUID) |
+| `AC_API_KEY_P8_BASE64` | the `.p8` key file, base64-encoded |
+
+Create the certificate in Xcode → Settings → Accounts → Manage Certificates →
+**+** → *Developer ID Application* (needs the Account Holder role). Export it
+from Keychain Access as a `.p12`, then:
+
+```bash
+base64 -i DeveloperID.p12 | pbcopy          # → DEVELOPER_ID_P12_BASE64
+base64 -i AuthKey_XXXXXX.p8 | pbcopy        # → AC_API_KEY_P8_BASE64
+```
+
+The API key comes from appstoreconnect.apple.com → Users and Access →
+Integrations → App Store Connect API. The `.p8` downloads exactly once, and
+Developer ID certificates are capped per team — archive both somewhere safe.
+
+Locally, `scripts/build-app.sh --notarize` does the same thing, reading
+`AC_API_KEY_PATH`, `AC_API_KEY_ID` and `AC_API_ISSUER_ID` from the environment.
+It submits a zip (`notarytool` rejects `.tar.gz`), staples the ticket into the
+bundle so first launch works offline, and fails the build unless Gatekeeper
+reports `accepted, source=Notarized Developer ID`.
+
 ## Building and testing
 
 ```bash

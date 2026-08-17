@@ -2,7 +2,10 @@
 # build-app.sh — release build + WorkSync.app assembly + codesign + tarball.
 #
 # Usage:
-#   scripts/build-app.sh [--identity "IDENTITY"] [--adhoc] [--no-tar]
+#   scripts/build-app.sh [--identity "IDENTITY"] [--adhoc] [--no-tar] [--notarize]
+#
+# --notarize submits to Apple and staples the ticket into the bundle. Needs a
+# Developer ID identity and AC_API_KEY_PATH / AC_API_KEY_ID / AC_API_ISSUER_ID.
 #
 # The bundle is REQUIRED, not cosmetic (SPEC §3.1): UNUserNotificationCenter,
 # SMAppService.mainApp, and LSUIElement all need a genuine registered app bundle.
@@ -20,12 +23,14 @@ BUNDLE="build/${APP_NAME}.app"
 IDENTITY=""
 ADHOC=0
 MAKE_TAR=1
+NOTARIZE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --identity) IDENTITY="$2"; shift 2 ;;
     --adhoc)    ADHOC=1; shift ;;
     --no-tar)   MAKE_TAR=0; shift ;;
+    --notarize) NOTARIZE=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -117,6 +122,49 @@ if [[ "$ADHOC" -eq 0 ]]; then
   # TCC and notification grants would reset on every rebuild (SPEC §3).
   if echo "$DR" | grep -q 'cdhash' && ! echo "$DR" | grep -q 'identifier'; then
     echo "ERROR: designated requirement is a bare cdhash — stable identity not applied." >&2
+    exit 1
+  fi
+fi
+
+if [[ "$NOTARIZE" -eq 1 ]]; then
+  if [[ "$ADHOC" -eq 1 ]]; then
+    echo "ERROR: --notarize needs a Developer ID identity; ad-hoc cannot be notarized." >&2
+    exit 1
+  fi
+  : "${AC_API_KEY_PATH:?--notarize needs AC_API_KEY_PATH (App Store Connect .p8)}"
+  : "${AC_API_KEY_ID:?--notarize needs AC_API_KEY_ID}"
+  : "${AC_API_ISSUER_ID:?--notarize needs AC_API_ISSUER_ID}"
+
+  # notarytool accepts only .zip, .pkg and .dmg — verified by running it
+  # against a .tar.gz, which it refuses at pre-flight. The zip is a transport
+  # for the notary service only; it is never published.
+  ZIP="build/${APP_NAME}-notarize.zip"
+  echo "==> zipping for notarization"
+  rm -f "$ZIP"
+  # ditto, not zip(1): ditto preserves the bundle's symlinks and extended
+  # attributes, and a plain zip can produce an archive the notary rejects.
+  ditto -c -k --keepParent "$BUNDLE" "$ZIP"
+
+  echo "==> notarytool submit (waits for Apple; usually 1-5 min)"
+  xcrun notarytool submit "$ZIP" \
+    --key "$AC_API_KEY_PATH" \
+    --key-id "$AC_API_KEY_ID" \
+    --issuer "$AC_API_ISSUER_ID" \
+    --wait
+  rm -f "$ZIP"
+
+  # Staple the BUNDLE, not the zip: the ticket has to travel inside the .app so
+  # Gatekeeper can validate with no network. Without stapling, a first launch
+  # offline fails even though the app is notarized.
+  echo "==> stapling"
+  xcrun stapler staple "$BUNDLE"
+  xcrun stapler validate "$BUNDLE"
+
+  # The verdict users actually get. Checked here so a broken release fails the
+  # build rather than shipping and failing on their machine.
+  echo "==> Gatekeeper assessment"
+  if ! spctl -a -vvv -t exec "$BUNDLE" 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID"; then
+    echo "ERROR: Gatekeeper did not accept the notarized bundle." >&2
     exit 1
   fi
 fi
