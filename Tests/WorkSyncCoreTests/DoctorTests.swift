@@ -444,6 +444,19 @@ final class DoctorTests: XCTestCase {
         XCTAssertTrue(text.contains("bundle"), text)
     }
 
+    func testAnUnknowableNotificationStateIsSkippedRatherThanWarned() throws {
+        // Invoked through a symlink on PATH — how Homebrew installs the CLI —
+        // the process is outside the bundle and the notification centre calls
+        // every setting unsupported. Warning there would fire on every healthy
+        // machine using the CLI, about a capability the CLI never uses.
+        var inputs = healthyInputs()
+        inputs.notifications = .unavailable("only checkable from the app")
+
+        let found = try finding("notifications", in: DoctorChecks.run(inputs))
+        XCTAssertEqual(found.severity, .skipped, "unknowable is not the same as wrong")
+        XCTAssertEqual(DoctorChecks.run(inputs).exitCode(), 0)
+    }
+
     func testDeniedNotificationsWarnAndOfferBothWaysOut() throws {
         var inputs = healthyInputs()
         inputs.notifications = .denied

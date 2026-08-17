@@ -76,22 +76,12 @@ finishes. You can skip the link entirely and run
 `WorkSync.app/Contents/MacOS/worksync <command>` instead — every example below
 assumes the link exists.
 
-If you did download through a browser, clear the flag before opening it:
+Releases from v0.2.1 onward are signed with a Developer ID and notarized by
+Apple, so they open normally however you download them, and your calendar
+permission survives updates rather than resetting on each one.
 
-```bash
-xattr -d com.apple.quarantine WorkSync.app
-```
-
-On macOS 15 and later there is no Control-click "Open anyway" shortcut any
-more; a blocked app has to be approved in System Settings → Privacy & Security.
-
-Release builds are ad-hoc signed, because the CI runner has no signing
-identity. They work, but macOS will forget your calendar permission on every
-update. To fix that permanently, re-sign once with your own certificate:
-
-```bash
-scripts/build-app.sh --identity "WorkSync Dev"
-```
+(v0.2.0 and earlier were ad-hoc signed and Gatekeeper refuses them. If you are
+on one of those, upgrading is the fix.)
 
 ## First run
 

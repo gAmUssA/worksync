@@ -137,6 +137,18 @@ enum DoctorFacts {
 
     private static func notifications(config: Config?) -> NotificationFacts {
         guard let config, config.general.notify != .off else { return .notApplicable }
+
+        // Only the menu bar app posts notifications (SPEC §4.1). Invoked
+        // through a symlink on PATH — which is how Homebrew installs the CLI,
+        // and how the README tells everyone else to — this process is not
+        // inside the bundle, so the notification centre reports every setting
+        // as unsupported. Warning about that would fire on every healthy
+        // machine that uses the CLI, which is the one thing these checks may
+        // not do; and it would be describing a capability the CLI never uses.
+        guard Bundle.main.bundlePath.hasSuffix(".app") else {
+            return .unavailable("only checkable from the app; the CLI does not post notifications")
+        }
+
         guard Bundle.main.bundleIdentifier != nil else {
             // No bundle identifier means UNUserNotificationCenter.current()
             // traps rather than returning an error (SPEC §3.1 rule 2).
