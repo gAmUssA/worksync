@@ -28,22 +28,18 @@ macOS 14 or later, and the Xcode command line tools to build.
 
 ## Install
 
-WorkSync is not notarized, so how you download it matters more than usual.
-
-**Recommended — build it yourself.** This is the path that gives you a stable
-code signature, which is what keeps macOS from revoking calendar access every
-time you update (see [Signing](#signing) for why).
+**Homebrew.** Installs the app and puts the `worksync` CLI on your PATH — they
+are the same binary.
 
 ```bash
-git clone https://github.com/gAmUssA/worksync
-cd worksync
-swift test                    # optional, ~1s
-scripts/build-app.sh          # assembles and signs WorkSync.app
+brew install --cask gAmUssA/worksync/worksync
 ```
 
-**Or download a release.** Use `curl`, not your browser: files downloaded by a
-browser get macOS's quarantine attribute, and an app that is not notarized will
-be blocked. `curl` does not set it.
+Releases are signed with a Developer ID and notarized, so this works with no
+Gatekeeper detour, and updates keep your calendar permission.
+
+**Or download a release** — any way you like; browser downloads are fine now
+that builds are notarized.
 
 ```bash
 curl -L -o worksync.tar.gz \
@@ -55,10 +51,23 @@ Every release publishes two identical tarballs: `WorkSync-arm64.tar.gz`, whose
 name never changes so the `latest` URL above keeps working, and
 `WorkSync-<tag>-arm64.tar.gz` for pinning a specific version.
 
+**Or build it yourself.**
+
+```bash
+git clone https://github.com/gAmUssA/worksync
+cd worksync
+swift test                    # optional, ~1s
+scripts/build-app.sh          # assembles and signs WorkSync.app
+```
+
+A local build is signed with your own certificate rather than notarized, so
+see [Signing](#signing) for how to keep the calendar grant stable.
+
 ### Put the CLI on your PATH
 
-The download is an app bundle, so the `worksync` command does not exist until
-you link the executable inside it. Both install paths need this step:
+Homebrew does this for you. If you downloaded a release or built from source,
+the `worksync` command does not exist until you link the executable inside the
+bundle:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -328,7 +337,8 @@ calling a change done, verify by hand:
 
 - **One way only.** Work calendar content is read for reconciliation and
   conflict checks, and never copied anywhere.
-- **Not notarized.** See [Install](#install).
+- **Apple silicon only.** The release is an arm64 build; Intel Macs need a
+  local build from source.
 - **The change-driven fast path is best-effort.** `EKEventStoreChanged` may not
   fire at all on some macOS versions, and nothing is delivered while the machine
   sleeps. The timer is the guarantee; the fast path only ever makes it sooner.
