@@ -53,7 +53,8 @@ final class ExampleConfigTests: XCTestCase {
             "coalesce", "coalesce_gap_minutes",
             "min_duration_minutes", "max_duration_minutes",
             "padding_before_minutes", "padding_after_minutes",
-            "skip_weekdays", "include_all_day", "skip_if_work_busy", "availability",
+            "skip_weekdays", "include_all_day", "skip_if_work_busy",
+            "title_matches", "title_excludes", "availability",
         ]
         for key in keys {
             XCTAssertTrue(

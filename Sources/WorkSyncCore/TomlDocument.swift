@@ -143,10 +143,15 @@ enum TomlValue {
     /// A TOML basic string. Control characters get their escape sequence —
     /// emitting one literally produces a file TOML cannot parse, which turns a
     /// save into a round-trip failure rather than a written config.
+    ///
+    /// Iterates unicode scalars, not characters: Swift treats CR LF as ONE
+    /// grapheme cluster, so a `Character` switch matches neither "\r" nor "\n"
+    /// and a Windows line ending would escape nothing. Only C0 and DEL need
+    /// escaping — TOML permits C1 (U+0080–U+009F) literally.
     static func string(_ value: String) -> String {
         var escaped = ""
-        for character in value {
-            switch character {
+        for scalar in value.unicodeScalars {
+            switch scalar {
             case "\\": escaped += "\\\\"
             case "\"": escaped += "\\\""
             case "\u{08}": escaped += "\\b"
@@ -155,13 +160,10 @@ enum TomlValue {
             case "\u{0C}": escaped += "\\f"
             case "\r": escaped += "\\r"
             default:
-                // Remaining C0 controls and DEL have no short escape.
-                if let scalar = character.unicodeScalars.first,
-                   character.unicodeScalars.count == 1,
-                   scalar.value < 0x20 || scalar.value == 0x7F {
+                if scalar.value < 0x20 || scalar.value == 0x7F {
                     escaped += String(format: "\\u%04X", scalar.value)
                 } else {
-                    escaped.append(character)
+                    escaped.unicodeScalars.append(scalar)
                 }
             }
         }

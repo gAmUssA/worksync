@@ -219,4 +219,41 @@ final class TitleFilterTests: XCTestCase {
         let reloaded = try rewritten { $0.sources[0].titleTemplate = "Busy\nBlock" }
         XCTAssertEqual(reloaded.sources[0].titleTemplate, "Busy\nBlock")
     }
+
+    /// Swift treats CR LF as one grapheme cluster, so a Character-based escaper
+    /// matches neither "\r" nor "\n" and emits the pair literally.
+    func testWindowsLineEndingInAFilterRoundTrips() throws {
+        let reloaded = try rewritten { $0.sources[0].titleMatches = ["Focus\r\nTime"] }
+        XCTAssertEqual(reloaded.sources[0].titleMatches, ["Focus\r\nTime"])
+    }
+
+    /// TOML permits C1 (U+0080-U+009F) literally; only C0 and DEL need escaping.
+    func testC1CharacterSurvivesUnescaped() throws {
+        let reloaded = try rewritten { $0.sources[0].titleMatches = ["Focus\u{0085}Time"] }
+        XCTAssertEqual(reloaded.sources[0].titleMatches, ["Focus\u{0085}Time"])
+    }
+
+    // MARK: In-memory validation
+
+    /// ConfigWriter.save validates in-memory edits that never pass through
+    /// parse(). A blank entry there would disable title_matches outright, and
+    /// make title_excludes suppress every event on the source.
+    func testValidateRejectsABlankMatchEntry() throws {
+        var config = try ConfigLoader.parse(ExampleConfig.contents)
+        config.sources[0].titleMatches = ["Commitment", ""]
+        XCTAssertThrowsError(try ConfigLoader.validate(config))
+    }
+
+    func testValidateRejectsABlankExcludeEntry() throws {
+        var config = try ConfigLoader.parse(ExampleConfig.contents)
+        config.sources[0].titleExcludes = ["   "]
+        XCTAssertThrowsError(try ConfigLoader.validate(config))
+    }
+
+    func testValidateAcceptsRealEntries() throws {
+        var config = try ConfigLoader.parse(ExampleConfig.contents)
+        config.sources[0].titleMatches = ["Personal Commitment"]
+        config.sources[0].titleExcludes = ["Declined"]
+        XCTAssertNoThrow(try ConfigLoader.validate(config))
+    }
 }

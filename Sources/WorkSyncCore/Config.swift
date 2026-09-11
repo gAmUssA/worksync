@@ -286,6 +286,12 @@ public enum ConfigLoader {
             try checkNonNegative(source.coalesceGapMinutes, "source \"\(source.id)\".coalesce_gap_minutes", min: 0)
             try checkNonNegative(source.minDurationMinutes, "source \"\(source.id)\".min_duration_minutes", min: 0)
             try checkNonNegative(source.maxDurationMinutes, "source \"\(source.id)\".max_duration_minutes", min: 0)
+            // parse() rejects these, but an in-memory Config never goes through
+            // it. A blank entry is not a harmless no-op: "" matches every title,
+            // so it disables title_matches and makes title_excludes suppress the
+            // whole source.
+            try checkNoBlankEntries(source.titleMatches, "source \"\(source.id)\".title_matches")
+            try checkNoBlankEntries(source.titleExcludes, "source \"\(source.id)\".title_excludes")
             // An unsatisfiable window would silently mirror nothing at all.
             if source.maxDurationMinutes > 0, source.maxDurationMinutes < source.minDurationMinutes {
                 throw ConfigError.invalidValue(
@@ -328,6 +334,12 @@ public enum ConfigLoader {
             )
         }
         return id
+    }
+
+    private static func checkNoBlankEntries(_ values: [String], _ field: String) throws {
+        for value in values where value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ConfigError.invalidValue(field: field, value: value, allowed: "non-empty strings")
+        }
     }
 
     private static func checkNonNegative(_ value: Int, _ field: String, min: Int) throws {
