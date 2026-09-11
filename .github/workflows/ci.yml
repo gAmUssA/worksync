@@ -196,6 +196,14 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release
     runs-on: ubuntu-latest
+    # Every release writes the same branch of the same tap. Two tags pushed
+    # close together would otherwise check out the same HEAD and the second
+    # push would be rejected, leaving the newer release published with a stale
+    # cask. cancel-in-progress stays false: cancelling would drop a bump whose
+    # release already succeeded.
+    concurrency:
+      group: bump-homebrew-tap
+      cancel-in-progress: false
     steps:
       # Same shape as the signing-secret gate above: do the real thing when the
       # credential exists, say so loudly and skip when it does not, rather than
@@ -263,12 +271,40 @@ jobs:
         run: |
           set -euo pipefail
           cd tap
+          VERSION="${TAG#v}"
           if git diff --quiet; then
-            echo "Cask already at ${TAG#v} — nothing to push."
+            echo "Cask already at ${VERSION} — nothing to push."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/worksync.rb
-          git commit -m "WorkSync cask ${TAG#v}"
-          git push
+          git commit -m "WorkSync cask ${VERSION}"
+
+          # The concurrency group serializes this repo's own runs; the retry
+          # additionally covers anyone pushing to the tap by hand.
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Pushed cask ${VERSION} on attempt ${attempt}."
+              exit 0
+            fi
+
+            echo "Push rejected — inspecting the tap's current state."
+            git fetch origin
+
+            # Never move the cask backwards: an out-of-order run for an older
+            # tag must not overwrite a newer release that already landed.
+            THEIRS=$(git show origin/HEAD:Casks/worksync.rb \
+              | sed -nE 's|^  version "([^"]*)"$|\1|p')
+            NEWEST=$(printf '%s\n%s\n' "$VERSION" "$THEIRS" | sort -V | tail -1)
+            if [ "$THEIRS" != "$VERSION" ] && [ "$NEWEST" = "$THEIRS" ]; then
+              echo "::notice::Tap already carries ${THEIRS}, newer than ${VERSION}. Leaving it alone."
+              exit 0
+            fi
+
+            git rebase origin/HEAD
+          done
+
+          echo "::error::Could not push the cask bump for ${VERSION} after 3 attempts. \
+          Update gAmUssA/homebrew-worksync by hand." >&2
+          exit 1
