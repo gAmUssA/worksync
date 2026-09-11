@@ -187,3 +187,85 @@ jobs:
           generate_release_notes: true
           body_path: ${{ runner.temp }}/release-notes.md
 
+
+  # The tap is a separate repo, so nothing here updates it on its own: the
+  # cask's livecheck block only REPORTS a new version, it never rewrites the
+  # file. Without this job every release ships while `brew install --cask`
+  # still hands users the previous one.
+  bump-tap:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      # Same shape as the signing-secret gate above: do the real thing when the
+      # credential exists, say so loudly and skip when it does not, rather than
+      # failing a release that already published successfully.
+      - name: Do we have a tap token?
+        id: token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No HOMEBREW_TAP_TOKEN secret — the Homebrew cask was \
+            NOT bumped and still points at the previous release. Update \
+            gAmUssA/homebrew-worksync by hand, or add the secret."
+          fi
+
+      - name: Check out the tap
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: gAmUssA/homebrew-worksync
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      # From the published asset, not from a local build: the cask's sha256
+      # must describe the bytes users actually download. Re-hashing a local
+      # artifact would pass here and fail on every user's machine if the
+      # upload differed for any reason.
+      - name: Bump the cask to the released version
+        if: steps.token.outputs.present == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/WorkSync-${TAG}-arm64.tar.gz"
+
+          curl -fsSL -o released.tar.gz "$URL"
+          SHA=$(shasum -a 256 released.tar.gz | awk '{print $1}')
+          echo "version=$VERSION sha256=$SHA"
+
+          CASK=tap/Casks/worksync.rb
+          # Anchored to the specific keys so nothing else in the file can match.
+          sed -i -E "s|^  version \"[^\"]*\"$|  version \"${VERSION}\"|" "$CASK"
+          sed -i -E "s|^  sha256 \"[^\"]*\"$|  sha256 \"${SHA}\"|" "$CASK"
+
+          # A sed that matched nothing leaves the file unchanged and would
+          # otherwise commit nothing and pass silently.
+          grep -q "version \"${VERSION}\"" "$CASK" || {
+            echo "::error::cask version was not updated to ${VERSION}" >&2; exit 1; }
+          grep -q "sha256 \"${SHA}\"" "$CASK" || {
+            echo "::error::cask sha256 was not updated" >&2; exit 1; }
+
+          ruby -c "$CASK"
+
+      - name: Commit and push the bump
+        if: steps.token.outputs.present == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd tap
+          if git diff --quiet; then
+            echo "Cask already at ${TAG#v} — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/worksync.rb
+          git commit -m "WorkSync cask ${TAG#v}"
+          git push
