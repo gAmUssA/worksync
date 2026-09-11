@@ -200,6 +200,9 @@ jobs:
       # Same shape as the signing-secret gate above: do the real thing when the
       # credential exists, say so loudly and skip when it does not, rather than
       # failing a release that already published successfully.
+      #
+      # A fine-grained PAT scoped to the tap repo with Contents: write.
+      # Revoke it at github.com/settings/personal-access-tokens if it leaks.
       - name: Do we have a tap token?
         id: token
         env:
