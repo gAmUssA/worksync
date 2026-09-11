@@ -187,3 +187,139 @@ jobs:
           generate_release_notes: true
           body_path: ${{ runner.temp }}/release-notes.md
 
+
+  # The tap is a separate repo, so nothing here updates it on its own: the
+  # cask's livecheck block only REPORTS a new version, it never rewrites the
+  # file. Without this job every release ships while `brew install --cask`
+  # still hands users the previous one.
+  bump-tap:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-latest
+    # Every release writes the same branch of the same tap. Two tags pushed
+    # close together would otherwise check out the same HEAD and the second
+    # push would be rejected, leaving the newer release published with a stale
+    # cask. cancel-in-progress stays false: cancelling would drop a bump whose
+    # release already succeeded.
+    concurrency:
+      group: bump-homebrew-tap
+      cancel-in-progress: false
+    steps:
+      # Same shape as the signing-secret gate above: do the real thing when the
+      # credential exists, say so loudly and skip when it does not, rather than
+      # failing a release that already published successfully.
+      #
+      # A fine-grained PAT scoped to the tap repo with Contents: write.
+      # Revoke it at github.com/settings/personal-access-tokens if it leaks.
+      - name: Do we have a tap token?
+        id: token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No HOMEBREW_TAP_TOKEN secret — the Homebrew cask was \
+            NOT bumped and still points at the previous release. Update \
+            gAmUssA/homebrew-worksync by hand, or add the secret."
+          fi
+
+      - name: Check out the tap
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: gAmUssA/homebrew-worksync
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      # From the published asset, not from a local build: the cask's sha256
+      # must describe the bytes users actually download. Re-hashing a local
+      # artifact would pass here and fail on every user's machine if the
+      # upload differed for any reason.
+      - name: Bump the cask to the released version
+        if: steps.token.outputs.present == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/WorkSync-${TAG}-arm64.tar.gz"
+
+          curl -fsSL -o released.tar.gz "$URL"
+          SHA=$(shasum -a 256 released.tar.gz | awk '{print $1}')
+          echo "version=$VERSION sha256=$SHA"
+
+          CASK=tap/Casks/worksync.rb
+
+          # Before touching the file, not only after a rejected push. The
+          # concurrency lock means a queued run checks out AFTER the previous
+          # one pushed, so an out-of-order older tag would see the newer cask,
+          # rewrite it downward and push fast-forward with nothing to reject.
+          CURRENT=$(sed -nE 's|^  version "([^"]*)"$|\1|p' "$CASK")
+          NEWEST=$(printf '%s\n%s\n' "$VERSION" "$CURRENT" | sort -V | tail -1)
+          if [ "$CURRENT" != "$VERSION" ] && [ "$NEWEST" = "$CURRENT" ]; then
+            echo "::notice::Tap carries ${CURRENT}, newer than ${VERSION}. Leaving it alone."
+            exit 0
+          fi
+
+          # Anchored to the specific keys so nothing else in the file can match.
+          sed -i -E "s|^  version \"[^\"]*\"$|  version \"${VERSION}\"|" "$CASK"
+          sed -i -E "s|^  sha256 \"[^\"]*\"$|  sha256 \"${SHA}\"|" "$CASK"
+
+          # A sed that matched nothing leaves the file unchanged and would
+          # otherwise commit nothing and pass silently.
+          grep -q "version \"${VERSION}\"" "$CASK" || {
+            echo "::error::cask version was not updated to ${VERSION}" >&2; exit 1; }
+          grep -q "sha256 \"${SHA}\"" "$CASK" || {
+            echo "::error::cask sha256 was not updated" >&2; exit 1; }
+
+          ruby -c "$CASK"
+
+      - name: Commit and push the bump
+        if: steps.token.outputs.present == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd tap
+          VERSION="${TAG#v}"
+          if git diff --quiet; then
+            echo "Cask already at ${VERSION} — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/worksync.rb
+          git commit -m "WorkSync cask ${VERSION}"
+
+          # The concurrency group serializes this repo's own runs; the retry
+          # additionally covers anyone pushing to the tap by hand.
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Pushed cask ${VERSION} on attempt ${attempt}."
+              exit 0
+            fi
+
+            echo "Push rejected — inspecting the tap's current state."
+            git fetch origin
+
+            # actions/checkout creates refs/remotes/origin/<branch> but no
+            # origin/HEAD, so name the branch rather than relying on it.
+            BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+            # Re-check the same ordering rule against what landed meanwhile.
+            THEIRS=$(git show "origin/${BRANCH}:Casks/worksync.rb" \
+              | sed -nE 's|^  version "([^"]*)"$|\1|p')
+            NEWEST=$(printf '%s\n%s\n' "$VERSION" "$THEIRS" | sort -V | tail -1)
+            if [ "$THEIRS" != "$VERSION" ] && [ "$NEWEST" = "$THEIRS" ]; then
+              echo "::notice::Tap already carries ${THEIRS}, newer than ${VERSION}. Leaving it alone."
+              exit 0
+            fi
+
+            git rebase "origin/${BRANCH}"
+          done
+
+          echo "::error::Could not push the cask bump for ${VERSION} after 3 attempts. \
+          Update gAmUssA/homebrew-worksync by hand." >&2
+          exit 1
