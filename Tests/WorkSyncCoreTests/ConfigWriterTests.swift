@@ -127,6 +127,153 @@ final class ConfigWriterTests: XCTestCase {
         XCTAssertEqual(try ConfigLoader.parse(text), updated)
     }
 
+    // MARK: Hand-wrapped arrays
+
+    /// A user who lists more than two or three entries wraps the array, and
+    /// `title_matches` / `title_excludes` are exactly the kind of list that
+    /// grows. Rewriting only the key's own line used to orphan the remaining
+    /// lines, and the unparseable result cost the user every comment in the
+    /// file when the writer fell back to a full rewrite.
+    private static let wrappedArrayFixture = """
+    # Hand-formatted, and it is going to stay that way.
+    [general]
+    window_days = 21
+
+    [target]
+    account = "Work"
+    calendar = "Calendar"
+
+    [[source]]
+    id = "personal"
+    account = "iCloud"
+    calendar = "Personal"
+    # Weekends are already mine.
+    skip_weekdays = [
+      "sat",
+      "sun",
+    ]                           # the working week is what colleagues care about
+    # Only the meetings that really block time.
+    title_matches = [
+      "1:1",
+      "interview",
+    ]
+    title_excludes = [
+      "tentative",
+    ]
+    title_template = "Busy"
+    """
+
+    /// Saves through the real on-disk path, because `outcome` is the only place
+    /// a silent fall back to full serialization shows up.
+    private func saveFixture(
+        _ fixture: String,
+        mutate: (inout Config) -> Void
+    ) throws -> (text: String, outcome: ConfigWriteOutcome, config: Config) {
+        let directory = NSTemporaryDirectory() + "worksync-writer-\(UUID().uuidString)"
+        let path = directory + "/config.toml"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try fixture.write(toFile: path, atomically: true, encoding: .utf8)
+
+        var updated = try ConfigLoader.parse(fixture)
+        mutate(&updated)
+        let outcome = try ConfigWriter.save(updated, to: path)
+        return try (String(contentsOfFile: path, encoding: .utf8), outcome, updated)
+    }
+
+    private func comments(in text: String) -> [String] {
+        text.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("#") }
+    }
+
+    func testEditingAWrappedSkipWeekdaysKeepsTheFileIntact() throws {
+        let fixture = Self.wrappedArrayFixture
+        let (text, outcome, expected) = try saveFixture(fixture) { $0.sources[0].skipWeekdays = [1] }
+
+        XCTAssertEqual(outcome, .preserved, "the line edit must hold: \n\(text)")
+        XCTAssertEqual(comments(in: text), comments(in: fixture), "every comment must survive")
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertTrue(text.contains("skip_weekdays = [\"sun\"]"), text)
+        XCTAssertFalse(text.contains("\"sat\""), "the old elements must be gone, not orphaned: \n\(text)")
+    }
+
+    func testEditingAWrappedTitleMatchesKeepsTheFileIntact() throws {
+        let fixture = Self.wrappedArrayFixture
+        let (text, outcome, expected) = try saveFixture(fixture) {
+            $0.sources[0].titleMatches = ["standup"]
+        }
+
+        XCTAssertEqual(outcome, .preserved, "the line edit must hold: \n\(text)")
+        XCTAssertEqual(comments(in: text), comments(in: fixture), "every comment must survive")
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertTrue(text.contains("title_matches = [\"standup\"]"), text)
+        XCTAssertFalse(text.contains("\"interview\""), "the old elements must be gone: \n\(text)")
+    }
+
+    func testEditingAWrappedTitleExcludesKeepsTheFileIntact() throws {
+        let fixture = Self.wrappedArrayFixture
+        let (text, outcome, expected) = try saveFixture(fixture) {
+            $0.sources[0].titleExcludes = ["hold", "optional"]
+        }
+
+        XCTAssertEqual(outcome, .preserved, "the line edit must hold: \n\(text)")
+        XCTAssertEqual(comments(in: text), comments(in: fixture), "every comment must survive")
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertTrue(text.contains("title_excludes = [\"hold\", \"optional\"]"), text)
+    }
+
+    func testAWrappedArrayCanBeEmptied() throws {
+        let fixture = Self.wrappedArrayFixture
+        let (text, outcome, expected) = try saveFixture(fixture) { $0.sources[0].titleMatches = [] }
+
+        XCTAssertEqual(outcome, .preserved, "the line edit must hold: \n\(text)")
+        XCTAssertEqual(comments(in: text), comments(in: fixture), "every comment must survive")
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertTrue(text.contains("title_matches = []"), text)
+    }
+
+    func testTheCommentAfterAWrappedArraysClosingBracketSurvives() throws {
+        let fixture = Self.wrappedArrayFixture
+        let (text, _, _) = try saveFixture(fixture) { $0.sources[0].skipWeekdays = [1] }
+
+        let line = try XCTUnwrap(text.components(separatedBy: "\n").first { $0.contains("skip_weekdays =") })
+        XCTAssertTrue(
+            line.contains("# the working week is what colleagues care about"),
+            "the explanation after the closing bracket must travel with the key: \(line)"
+        )
+    }
+
+    func testEditingOneWrappedArrayLeavesTheOthersByteIdentical() throws {
+        let fixture = Self.wrappedArrayFixture
+        let (text, _, _) = try saveFixture(fixture) { $0.sources[0].skipWeekdays = [1] }
+
+        for block in ["title_matches = [\n  \"1:1\",\n  \"interview\",\n]", "title_excludes = [\n  \"tentative\",\n]"] {
+            XCTAssertTrue(text.contains(block), "an untouched wrapped array must not be reflowed: \n\(text)")
+        }
+    }
+
+    func testASingleLineArrayStillChangesOnlyItsOwnLine() throws {
+        let fixture = Self.wrappedArrayFixture
+            .replacingOccurrences(
+                of: "title_excludes = [\n  \"tentative\",\n]",
+                with: "title_excludes = [\"tentative\"]"
+            )
+        let (text, outcome, expected) = try saveFixture(fixture) {
+            $0.sources[0].titleExcludes = ["hold"]
+        }
+
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+
+        let before = fixture.components(separatedBy: "\n")
+        let after = text.components(separatedBy: "\n")
+        XCTAssertEqual(before.count, after.count, "a single-line array must not change the line count")
+        let differing = zip(before, after).filter { $0 != $1 }
+        XCTAssertEqual(differing.count, 1, "exactly one line should differ")
+        XCTAssertEqual(differing.first?.1, "title_excludes = [\"hold\"]")
+    }
+
     // MARK: Sources
 
     func testEditingOneSourceLeavesTheOtherUntouched() throws {

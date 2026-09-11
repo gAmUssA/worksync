@@ -69,13 +69,27 @@ struct TomlDocument {
     // MARK: Line-level editing
 
     /// Rewrites `key`'s value inside `section`, keeping any trailing comment on
-    /// that line. Appends the key if it is not present.
+    /// the line that ends the value. Appends the key if it is not present.
+    ///
+    /// A hand-wrapped array spans several lines, so the whole span is replaced.
+    /// Rewriting only the line the key sits on would leave the continuation
+    /// lines orphaned and the file unparseable, which costs the user every
+    /// comment in it when `ConfigWriter` falls back to full serialization.
     static func setValue(_ value: String, forKey key: String, in section: inout Section) {
         for index in section.body.indices {
             guard keyOnLine(section.body[index]) == key else { continue }
-            let (_, comment) = splitValueAndComment(section.body[index])
             let indent = section.body[index].prefix { $0 == " " || $0 == "\t" }
-            section.body[index] = "\(indent)\(key) = \(value)\(comment)"
+            if let end = arrayEnd(startingAt: index, in: section.body) {
+                // The comment kept is the one after the closing bracket, where
+                // a wrapped array's explanation conventionally sits. Comments
+                // on the opening line or between the elements describe the old
+                // elements, which are the thing being replaced.
+                let comment = scan(section.body[end]).comment
+                section.body.replaceSubrange(index ... end, with: ["\(indent)\(key) = \(value)\(comment)"])
+            } else {
+                let (_, comment) = splitValueAndComment(section.body[index])
+                section.body[index] = "\(indent)\(key) = \(value)\(comment)"
+            }
             return
         }
         // Not present: append after the last non-blank line so the key does not
@@ -85,6 +99,59 @@ struct TomlDocument {
             insertAt -= 1
         }
         section.body.insert("\(key) = \(value)", at: insertAt)
+    }
+
+    /// The index of the line closing an array that opens on `index` without
+    /// closing there, or nil when the value ends on its own line.
+    ///
+    /// Only bracket depth is tracked. Inline tables and nested arrays are not
+    /// in the config schema's vocabulary (SPEC §2), so nothing here tries to
+    /// understand them beyond keeping the brackets balanced.
+    static func arrayEnd(startingAt index: Int, in body: [String]) -> Int? {
+        let line = body[index]
+        guard let equals = line.firstIndex(of: "=") else { return nil }
+        var depth = scan(String(line[line.index(after: equals)...])).depth
+        guard depth > 0 else { return nil }
+
+        var cursor = index + 1
+        while cursor < body.count {
+            depth += scan(body[cursor]).depth
+            if depth <= 0 {
+                return cursor
+            }
+            cursor += 1
+        }
+        // No closing bracket anywhere: the file is already broken. Leave the
+        // span alone rather than swallowing the rest of the section.
+        return nil
+    }
+
+    /// How much `text` changes the bracket depth before its trailing comment,
+    /// and that comment. Brackets and `#` inside a quoted string do not count.
+    private static func scan(_ text: String) -> (depth: Int, comment: String) {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            if escaped {
+                escaped = false
+            } else if character == "\\", inString {
+                escaped = true
+            } else if character == "\"" {
+                inString.toggle()
+            } else if !inString {
+                switch character {
+                case "#": return (depth, String(text[index...]))
+                case "[": depth += 1
+                case "]": depth -= 1
+                default: break
+                }
+            }
+            index = text.index(after: index)
+        }
+        return (depth, "")
     }
 
     static func value(forKey key: String, in section: Section) -> String? {
