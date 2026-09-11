@@ -140,10 +140,31 @@ struct TomlDocument {
 
 /// Rendering Swift values as TOML literals.
 enum TomlValue {
+    /// A TOML basic string. Control characters get their escape sequence —
+    /// emitting one literally produces a file TOML cannot parse, which turns a
+    /// save into a round-trip failure rather than a written config.
     static func string(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        var escaped = ""
+        for character in value {
+            switch character {
+            case "\\": escaped += "\\\\"
+            case "\"": escaped += "\\\""
+            case "\u{08}": escaped += "\\b"
+            case "\t": escaped += "\\t"
+            case "\n": escaped += "\\n"
+            case "\u{0C}": escaped += "\\f"
+            case "\r": escaped += "\\r"
+            default:
+                // Remaining C0 controls and DEL have no short escape.
+                if let scalar = character.unicodeScalars.first,
+                   character.unicodeScalars.count == 1,
+                   scalar.value < 0x20 || scalar.value == 0x7F {
+                    escaped += String(format: "\\u%04X", scalar.value)
+                } else {
+                    escaped.append(character)
+                }
+            }
+        }
         return "\"\(escaped)\""
     }
 
@@ -153,6 +174,10 @@ enum TomlValue {
 
     static func bool(_ value: Bool) -> String {
         value ? "true" : "false"
+    }
+
+    static func strings(_ values: [String]) -> String {
+        "[" + values.map(string).joined(separator: ", ") + "]"
     }
 
     static func weekdays(_ components: Set<Int>) -> String {

@@ -146,8 +146,33 @@ public enum SyncPlanner {
             ) {
                 return false
             }
+            // Title decides eligibility only. It is never copied onto the
+            // blocker — the title always comes from the source's template, so
+            // reading it here cannot leak it (SPEC §5).
+            if !matchesTitleFilters(event.title, source: source) {
+                return false
+            }
             return true
         }
+    }
+
+    /// Title gating: an event must contain one of `titleMatches` (when that
+    /// list is non-empty) and none of `titleExcludes`. Excludes win over
+    /// matches, so an event hitting both is dropped.
+    ///
+    /// Comparison is case- and diacritic-insensitive so a config written as
+    /// "personal commitment" still matches "Personal Commitment".
+    static func matchesTitleFilters(_ title: String, source: SourceConfig) -> Bool {
+        func contains(_ needle: String) -> Bool {
+            title.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+        if !source.titleMatches.isEmpty, !source.titleMatches.contains(where: contains) {
+            return false
+        }
+        if source.titleExcludes.contains(where: contains) {
+            return false
+        }
+        return true
     }
 
     /// SPEC §5 step 4: padding, within-source coalescing, and window filtering.

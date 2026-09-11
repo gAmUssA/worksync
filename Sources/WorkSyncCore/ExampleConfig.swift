@@ -144,6 +144,21 @@ public enum ExampleConfig {
     # a meeting you are already in.
     skip_if_work_busy = true
 
+    # Only mirror events whose title contains one of these. Matching ignores case
+    # AND accents, so "reunion" also matches "Réunion".
+    # Empty (the default) mirrors every event the other filters allow.
+    #
+    # The title is read to make this decision and is NEVER copied onto the blocker:
+    # the blocker's title always comes from title_template above. Use this to pull a
+    # single class of event off a shared calendar — the "Personal Commitment" holds
+    # another tool writes onto a work calendar, for example.
+    title_matches = []
+
+    # Never mirror an event whose title contains one of these. Same case- and
+    # accent-insensitive matching as title_matches above.
+    # Applied after title_matches, so an event hitting both lists is dropped.
+    title_excludes = []
+
     # busy | free | tentative — how the blocker appears to colleagues checking your
     # availability. "busy" is almost always what you want; "free" creates a visible
     # event that does not actually block scheduling.
