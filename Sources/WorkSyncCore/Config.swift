@@ -55,6 +55,13 @@ public struct SourceConfig: Equatable, Sendable {
     public var paddingAfterMinutes: Int = 0
     public var includeAllDay: Bool = false
     public var skipIfWorkBusy: Bool = false
+    /// Case- and diacritic-insensitive substrings. Non-empty means an event's
+    /// title must contain at least one of them to be mirrored. Empty matches
+    /// everything.
+    public var titleMatches: [String] = []
+    /// Case- and diacritic-insensitive substrings. An event whose title contains
+    /// any of them is never mirrored. Applied after `titleMatches`, so it wins.
+    public var titleExcludes: [String] = []
     public var availability: Availability = .busy
 
     public init(id: String, account: String, calendar: String) {
@@ -235,6 +242,12 @@ public enum ConfigLoader {
                 if let v = s["skip_if_work_busy"]?.bool {
                     source.skipIfWorkBusy = v
                 }
+                source.titleMatches = try stringList(
+                    s["title_matches"], field: "source \"\(id)\".title_matches"
+                )
+                source.titleExcludes = try stringList(
+                    s["title_excludes"], field: "source \"\(id)\".title_excludes"
+                )
                 if let v = s["availability"]?.string {
                     source.availability = try parseEnum(v, field: "source \"\(id)\".availability")
                 }
@@ -273,6 +286,12 @@ public enum ConfigLoader {
             try checkNonNegative(source.coalesceGapMinutes, "source \"\(source.id)\".coalesce_gap_minutes", min: 0)
             try checkNonNegative(source.minDurationMinutes, "source \"\(source.id)\".min_duration_minutes", min: 0)
             try checkNonNegative(source.maxDurationMinutes, "source \"\(source.id)\".max_duration_minutes", min: 0)
+            // parse() rejects these, but an in-memory Config never goes through
+            // it. A blank entry is not a harmless no-op: "" matches every title,
+            // so it disables title_matches and makes title_excludes suppress the
+            // whole source.
+            try checkNoBlankEntries(source.titleMatches, "source \"\(source.id)\".title_matches")
+            try checkNoBlankEntries(source.titleExcludes, "source \"\(source.id)\".title_excludes")
             // An unsatisfiable window would silently mirror nothing at all.
             if source.maxDurationMinutes > 0, source.maxDurationMinutes < source.minDurationMinutes {
                 throw ConfigError.invalidValue(
@@ -317,9 +336,40 @@ public enum ConfigLoader {
         return id
     }
 
+    private static func checkNoBlankEntries(_ values: [String], _ field: String) throws {
+        for value in values where value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ConfigError.invalidValue(field: field, value: value, allowed: "non-empty strings")
+        }
+    }
+
     private static func checkNonNegative(_ value: Int, _ field: String, min: Int) throws {
         guard value >= min else {
             throw ConfigError.invalidValue(field: field, value: String(value), allowed: ">= \(min)")
+        }
+    }
+
+    /// A TOML array of non-empty strings, or [] when the key is absent.
+    /// Blank entries are rejected rather than ignored: a stray "" in
+    /// title_matches matches every title and would silently disable the filter.
+    private static func stringList(_ value: (any TOMLValueConvertible)?, field: String) throws -> [String] {
+        guard let value else { return [] }
+        guard let array = value.array else {
+            throw ConfigError.invalidValue(
+                field: field, value: String(describing: value), allowed: "array of strings"
+            )
+        }
+        return try array.map { element in
+            guard let text = element.string else {
+                throw ConfigError.invalidValue(
+                    field: field, value: String(describing: element), allowed: "array of strings"
+                )
+            }
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ConfigError.invalidValue(
+                    field: field, value: text, allowed: "non-empty strings"
+                )
+            }
+            return text
         }
     }
 

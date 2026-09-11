@@ -333,6 +333,12 @@ public enum ConfigWriter {
             .skipIfWorkBusy {
             changes["skip_if_work_busy"] = TomlValue.bool(new.skipIfWorkBusy)
         }
+        if old.titleMatches != new.titleMatches {
+            changes["title_matches"] = TomlValue.strings(new.titleMatches)
+        }
+        if old.titleExcludes != new.titleExcludes {
+            changes["title_excludes"] = TomlValue.strings(new.titleExcludes)
+        }
         if old.availability != new
             .availability {
             changes["availability"] = TomlValue.string(new.availability.rawValue)
@@ -378,6 +384,8 @@ public enum ConfigWriter {
                 "skip_weekdays = \(TomlValue.weekdays(source.skipWeekdays))",
                 "include_all_day = \(TomlValue.bool(source.includeAllDay))",
                 "skip_if_work_busy = \(TomlValue.bool(source.skipIfWorkBusy))",
+                "title_matches = \(TomlValue.strings(source.titleMatches))",
+                "title_excludes = \(TomlValue.strings(source.titleExcludes))",
                 "availability = \(TomlValue.string(source.availability.rawValue))",
             ]
         }
