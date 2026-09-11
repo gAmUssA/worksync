@@ -251,6 +251,18 @@ jobs:
           echo "version=$VERSION sha256=$SHA"
 
           CASK=tap/Casks/worksync.rb
+
+          # Before touching the file, not only after a rejected push. The
+          # concurrency lock means a queued run checks out AFTER the previous
+          # one pushed, so an out-of-order older tag would see the newer cask,
+          # rewrite it downward and push fast-forward with nothing to reject.
+          CURRENT=$(sed -nE 's|^  version "([^"]*)"$|\1|p' "$CASK")
+          NEWEST=$(printf '%s\n%s\n' "$VERSION" "$CURRENT" | sort -V | tail -1)
+          if [ "$CURRENT" != "$VERSION" ] && [ "$NEWEST" = "$CURRENT" ]; then
+            echo "::notice::Tap carries ${CURRENT}, newer than ${VERSION}. Leaving it alone."
+            exit 0
+          fi
+
           # Anchored to the specific keys so nothing else in the file can match.
           sed -i -E "s|^  version \"[^\"]*\"$|  version \"${VERSION}\"|" "$CASK"
           sed -i -E "s|^  sha256 \"[^\"]*\"$|  sha256 \"${SHA}\"|" "$CASK"
@@ -292,9 +304,12 @@ jobs:
             echo "Push rejected — inspecting the tap's current state."
             git fetch origin
 
-            # Never move the cask backwards: an out-of-order run for an older
-            # tag must not overwrite a newer release that already landed.
-            THEIRS=$(git show origin/HEAD:Casks/worksync.rb \
+            # actions/checkout creates refs/remotes/origin/<branch> but no
+            # origin/HEAD, so name the branch rather than relying on it.
+            BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+            # Re-check the same ordering rule against what landed meanwhile.
+            THEIRS=$(git show "origin/${BRANCH}:Casks/worksync.rb" \
               | sed -nE 's|^  version "([^"]*)"$|\1|p')
             NEWEST=$(printf '%s\n%s\n' "$VERSION" "$THEIRS" | sort -V | tail -1)
             if [ "$THEIRS" != "$VERSION" ] && [ "$NEWEST" = "$THEIRS" ]; then
@@ -302,7 +317,7 @@ jobs:
               exit 0
             fi
 
-            git rebase origin/HEAD
+            git rebase "origin/${BRANCH}"
           done
 
           echo "::error::Could not push the cask bump for ${VERSION} after 3 attempts. \
