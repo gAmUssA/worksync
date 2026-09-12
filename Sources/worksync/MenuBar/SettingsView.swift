@@ -41,16 +41,18 @@ struct SettingsView: View {
         .onChange(of: idFieldFocused) { wasFocused, isFocused in
             // Only on the way out. Committing on focus gain would judge the
             // text the moment the user clicked into the field.
+            //
+            // The outcome is deliberately unused: leaving the field starts
+            // nothing that a refusal would have to stop, and the reason is
+            // rendered under the field either way.
             if wasFocused, !isFocused {
-                model.commitSourceIDDraft()
+                _ = model.commitSourceIDDraft()
             }
         }
-        .onChange(of: model.selectedSourceID) { _, newValue in
+        .onChange(of: model.selectedSource) { _, newValue in
             // Points the draft at the newly selected row, committing any
             // half-typed name first so it is neither lost nor carried across.
-            if model.sourceIDDraft?.committedID != newValue {
-                model.seedSourceIDDraft(for: newValue)
-            }
+            model.seedSourceIDDraft(for: newValue)
         }
         .alert(
             "Rename this source?",
@@ -163,7 +165,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var sourcesSection: some View {
-        if let config = model.editingConfig {
+        if model.editingConfig != nil {
             card("Sources") {
                 Text("The first source listed wins when the same event appears in two of them.")
                     .font(.caption)
@@ -171,17 +173,22 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 // Drag to reorder, because order decides dedup (SPEC §4.1).
-                List(selection: $model.selectedSourceID) {
-                    ForEach(config.sources, id: \.id) { source in
+                // Selection is an identity, not an id: the id is editable and
+                // a removed one can be taken by a later source.
+                // The rows the drag's offsets will be computed against, held
+                // so the drop can be checked against the list it was drawn on.
+                let rows = model.sourceRows
+                List(selection: $model.selectedSource) {
+                    ForEach(rows) { row in
                         HStack {
                             Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
-                            Text(source.id)
+                            Text(row.source.id)
                             Spacer()
-                            Text(source.calendar).font(.caption).foregroundStyle(.secondary)
+                            Text(row.source.calendar).font(.caption).foregroundStyle(.secondary)
                         }
-                        .tag(source.id)
+                        .tag(row.id)
                     }
-                    .onMove { model.moveSources(from: $0, to: $1) }
+                    .onMove { model.moveSources(from: $0, to: $1, rendered: rows.map(\.id)) }
                 }
                 .frame(height: 110)
                 .scrollContentBackground(.hidden)
@@ -191,7 +198,7 @@ struct SettingsView: View {
                     // discoverable macOS interaction (SPEC §11.1).
                     Button { model.addSource() } label: { Image(systemName: "plus") }
                     Button { model.removeSelectedSource() } label: { Image(systemName: "minus") }
-                        .disabled(model.selectedSourceID == nil)
+                        .disabled(model.selectedSource == nil)
                     Spacer()
                 }
             }
@@ -200,23 +207,22 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var sourceDetail: some View {
-        if let config = model.editingConfig,
-           let selected = model.selectedSourceID,
-           let index = config.sources.firstIndex(where: { $0.id == selected }) {
-            let source = config.sources[index]
+        if let handle = model.selectedSource, let source = model.source(for: handle) {
             card("“\(source.id)” settings") {
                 LabeledContent("Name") {
                     // Bound to the draft, never straight to the config: routing
                     // keystrokes at the rename policy made the first differing
                     // character open the orphan warning, and the field could
-                    // not accumulate a new name at all (SPEC §11.1).
+                    // not accumulate a new name at all (SPEC §11.1). Addressed
+                    // by this card's handle like every other control here, so a
+                    // setter retained from another source cannot rename this one.
                     TextField("id", text: Binding(
-                        get: { model.sourceIDDraft?.text ?? source.id },
-                        set: { model.sourceIDDraft?.text = $0 }
+                        get: { model.sourceName(of: handle) },
+                        set: { model.setSourceName($0, of: handle) }
                     ))
                     .textFieldStyle(.roundedBorder)
                     .focused($idFieldFocused)
-                    .onSubmit { model.commitSourceIDDraft() }
+                    .onSubmit { model.commitSourceName(of: handle) }
                 }
                 .font(.callout)
 
@@ -230,11 +236,11 @@ struct SettingsView: View {
                 calendarPickers(
                     account: Binding(
                         get: { source.account },
-                        set: { model.editingConfig?.sources[index].account = $0 }
+                        set: { value in model.updateSource(handle) { $0.account = value } }
                     ),
                     calendar: Binding(
                         get: { source.calendar },
-                        set: { model.editingConfig?.sources[index].calendar = $0 }
+                        set: { value in model.updateSource(handle) { $0.calendar = value } }
                     ),
                     writableOnly: false
                 )
@@ -242,7 +248,7 @@ struct SettingsView: View {
                 LabeledContent("Shown as") {
                     TextField("Busy", text: Binding(
                         get: { source.titleTemplate },
-                        set: { model.editingConfig?.sources[index].titleTemplate = $0 }
+                        set: { value in model.updateSource(handle) { $0.titleTemplate = value } }
                     ))
                     .textFieldStyle(.roundedBorder)
                 }
@@ -250,48 +256,154 @@ struct SettingsView: View {
 
                 stepper("Pad before", value: Binding(
                     get: { source.paddingBeforeMinutes },
-                    set: { model.editingConfig?.sources[index].paddingBeforeMinutes = $0 }
+                    set: { value in model.updateSource(handle) { $0.paddingBeforeMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 stepper("Pad after", value: Binding(
                     get: { source.paddingAfterMinutes },
-                    set: { model.editingConfig?.sources[index].paddingAfterMinutes = $0 }
+                    set: { value in model.updateSource(handle) { $0.paddingAfterMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 stepper("Ignore shorter than", value: Binding(
                     get: { source.minDurationMinutes },
-                    set: { model.editingConfig?.sources[index].minDurationMinutes = $0 }
+                    set: { value in model.updateSource(handle) { $0.minDurationMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 Toggle("Merge nearby events", isOn: Binding(
                     get: { source.coalesce },
-                    set: { model.editingConfig?.sources[index].coalesce = $0 }
+                    set: { value in model.updateSource(handle) { $0.coalesce = value } }
                 )).font(.callout)
 
                 Toggle("Include all-day events", isOn: Binding(
                     get: { source.includeAllDay },
-                    set: { model.editingConfig?.sources[index].includeAllDay = $0 }
+                    set: { value in model.updateSource(handle) { $0.includeAllDay = value } }
                 )).font(.callout)
 
                 Toggle("Skip when work is already busy", isOn: Binding(
                     get: { source.skipIfWorkBusy },
-                    set: { model.editingConfig?.sources[index].skipIfWorkBusy = $0 }
+                    set: { value in model.updateSource(handle) { $0.skipIfWorkBusy = value } }
                 )).font(.callout)
 
                 picker("Shows as", selection: Binding(
                     get: { source.availability },
-                    set: { model.editingConfig?.sources[index].availability = $0 }
+                    set: { value in model.updateSource(handle) { $0.availability = value } }
                 ), options: Availability.allCases, label: \.rawValue)
+
+                Divider()
+
+                // The one place a user is likely to assume the wrong thing:
+                // these read the source event's title, and nothing about them
+                // changes what a blocker is called (SPEC §7).
+                Text("A title is only read to decide what to mirror. Blockers are still called what “Shown as” says.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                titleFilterEditor(.matches, source: handle, entries: source.titleMatches)
+                titleFilterEditor(.excludes, source: handle, entries: source.titleExcludes)
             }
         }
+    }
+
+    /// One list per field, a row per entry — never a comma-joined text field,
+    /// because a calendar title can contain a comma.
+    ///
+    /// Blank and duplicate entries are refused in front of the field rather
+    /// than at save: `ConfigLoader.validate` throws on a blank one, and that
+    /// error names a config key at a moment far away from the keystroke.
+    private func titleFilterEditor(
+        _ field: TitleFilterField,
+        source handle: SourceHandle,
+        entries: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(field.title).font(.callout)
+
+            // Rows carry their own identity rather than their position: a
+            // commit can arrive after its row moved, and by position it would
+            // land on whatever shifted underneath — silently, since the index
+            // is still in range.
+            ForEach(model.titleFilterRows(field, of: handle)) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        TextField("", text: Binding(
+                            get: { row.text },
+                            set: { model.setTitleFilterEntry($0, field, of: handle, row: row.id) }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Entry in the \(field.accessibilityName)")
+
+                        Button {
+                            model.removeTitleFilter(field, from: handle, row: row.id)
+                        } label: {
+                            Image(systemName: "minus")
+                        }
+                        .accessibilityLabel(removeLabel(for: row.text, in: field))
+                    }
+                    // Live, because a row can be emptied in place and the user
+                    // should see why Save went away. `checkRow`, not `check`:
+                    // an emptied row is an error, where an empty add field is
+                    // just an add field nobody has typed into yet.
+                    if let message = model.titleFilterRowMessage(field, of: handle, row: row.id) {
+                        Text(message).font(.caption).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                TextField(field.addPlaceholder, text: Binding(
+                    get: { model.titleFilterDraft(field, of: handle) },
+                    set: { model.setTitleFilterDraft(field, to: $0, of: handle) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { model.addTitleFilter(field, to: handle) }
+
+                Button {
+                    model.addTitleFilter(field, to: handle)
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(!isAddable(model.titleFilterDraftCheck(field, of: handle)))
+                .accessibilityLabel("Add to the \(field.accessibilityName)")
+            }
+
+            if let message = TitleFilterEntry.message(
+                for: model.titleFilterDraftCheck(field, of: handle)
+            ) {
+                Text(message).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if entries.isEmpty {
+                Text(field.emptyMeaning).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Names the entry as well as its list, so a screen reader user knows which
+    /// row's remove button they are on, not just which list.
+    private func removeLabel(for text: String, in field: TitleFilterField) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            ? "Remove the empty entry from the \(field.accessibilityName)"
+            : "Remove “\(trimmed)” from the \(field.accessibilityName)"
+    }
+
+    private func isAddable(_ check: TitleFilterEntry.Check) -> Bool {
+        if case .valid = check {
+            return true
+        }
+        return false
     }
 
     // MARK: Footer
 
     private var footer: some View {
         HStack {
-            if let saveError = model.saveError {
-                Text(saveError)
+            if let message = SettingsMessagePolicy.footerMessage(
+                validationProblem: model.titleFilterProblem,
+                saveError: model.saveError
+            ) {
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)
                     .lineLimit(2)
@@ -302,7 +414,7 @@ struct SettingsView: View {
             Button("Save") { model.saveSettings() }
                 .glassButton()
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.editingConfig == nil)
+                .disabled(model.editingConfig == nil || model.titleFilterProblem != nil)
         }
         .padding(.horizontal, Theme.padding)
         .frame(height: Theme.barHeight)

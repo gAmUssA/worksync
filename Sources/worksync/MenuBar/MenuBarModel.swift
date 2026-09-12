@@ -56,7 +56,11 @@ final class MenuBarModel {
     var editingConfig: Config?
     /// Current ID -> ID on disk when settings opened. New sources have no entry.
     private var sourceOrigins: [String: String] = [:]
-    var selectedSourceID: String?
+    /// The selected source's editing identity. The config id is data the user
+    /// can edit; this is what the form's controls carry and resolve.
+    var selectedSource: SourceHandle?
+    /// Which identity names which source right now.
+    private var sourceHandles = SourceHandles()
     private(set) var availableCalendars: [CalendarRef] = []
     private(set) var settingsBlocked: String?
     var saveError: String?
@@ -67,12 +71,21 @@ final class MenuBarModel {
     /// The id field's text while it is being edited, held apart from
     /// `editingConfig` so a rename is judged once on commit rather than on
     /// every keystroke.
-    var sourceIDDraft: SourceIDDraft?
+    /// The name field's text and the source it belongs to. A callback that does
+    /// not own the field cannot write to it.
+    private(set) var sourceNameDraft = SourceNameDraft()
     /// Why the typed id was refused, shown under the field.
     var renameError: String?
     /// Ids that exist in the saved file, so a rename of a brand-new source
     /// does not warn about orphaning events that cannot exist yet.
     var savedSourceIDs: Set<String> = []
+    /// What is typed into each title-filter list's "add" field. The value
+    /// remembers which source it was typed for, so a half-typed entry cannot
+    /// follow the user to a different one even if a path forgets to clear it.
+    var titleFilterDrafts = TitleFilterDrafts()
+    /// Identities for the rows on screen, so an edit lands on the row it was
+    /// typed into rather than on whatever has shifted into its position.
+    private var titleFilterRowIDs = TitleFilterRowIDs()
 
     var isPaused: Bool {
         didSet {
@@ -456,6 +469,7 @@ extension MenuBarModel {
         do {
             let config = try ConfigLoader.load(path: configPath)
             editingConfig = config
+            sourceHandles.seed(config.sources.map(\.id))
             sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
             configError = nil
         } catch {
@@ -467,10 +481,9 @@ extension MenuBarModel {
             return
         }
         settingsBlocked = nil
+        seedTitleFilterRowIDs()
         loadCalendarChoices()
-        selectedSourceID = editingConfig?.sources.first?.id
-        sourceIDDraft = selectedSourceID.map(SourceIDDraft.init(id:))
-        renameError = nil
+        select(editingConfig?.sources.first.flatMap { sourceHandles.handle(of: $0.id) })
         saveError = nil
         saveWarning = nil
         screen = .settings
@@ -481,8 +494,11 @@ extension MenuBarModel {
         editingConfig = nil
         sourceOrigins = [:]
         pendingRename = nil
-        sourceIDDraft = nil
+        sourceNameDraft.removeAll()
         renameError = nil
+        titleFilterDrafts.removeAll()
+        titleFilterRowIDs.removeAll()
+        sourceHandles.removeAll()
     }
 
     /// Account/calendar choices for the popups, from the same enumeration
@@ -522,9 +538,16 @@ extension MenuBarModel {
 
     func addSource() {
         // Before reading editingConfig: an uncommitted rename has to land (or
-        // be refused) while the list still looks the way the user left it.
-        if sourceIDDraft?.isDirty == true {
-            commitSourceIDDraft()
+        // be refused) while the list still looks the way the user left it. A
+        // refusal stops the add, the way it stops a save — the user has a name
+        // on screen that cannot be applied, and adding a source underneath it
+        // would clear the error and move the selection off the problem.
+        //
+        // Asked unconditionally. Gating this on a dirty field inferred "nothing
+        // is pending" from "nothing has been typed since", which an open alert
+        // and a restored name together make false.
+        if commitSourceIDDraft().blocksAction {
+            return
         }
         guard var config = editingConfig else { return }
         let base = "source"
@@ -538,32 +561,107 @@ extension MenuBarModel {
         let calendar = calendarChoices(inAccount: account).first ?? ""
         config.sources.append(SourceConfig(id: name, account: account, calendar: calendar))
         editingConfig = config
-        selectedSourceID = name
-        sourceIDDraft = SourceIDDraft(id: name)
-        renameError = nil
+        // The dirty id draft was already committed above, while the list still
+        // looked the way the user left it.
+        select(sourceHandles.mint(name))
     }
 
     func removeSelectedSource() {
-        guard var config = editingConfig, let selected = selectedSourceID else { return }
-        guard let index = config.sources.firstIndex(where: { $0.id == selected }) else { return }
+        guard var config = editingConfig, let selected = sourceHandles.resolve(selectedSource) else { return }
+        guard let index = config.sources.firstIndex(where: { $0.id == selected.id }) else { return }
         config.sources.remove(at: index)
-        sourceOrigins.removeValue(forKey: selected)
+        sourceOrigins.removeValue(forKey: selected.id)
+        titleFilterRowIDs.removeSource(selected.handle)
+        // Retires the identity: every control still holding it now resolves to
+        // nothing, rather than to whichever source later takes that id.
+        sourceHandles.remove(selected.handle)
         editingConfig = config
-        selectedSourceID = config.sources.first?.id
-        // Deliberately not committed first: the draft belongs to the row being
+        // Deliberately not committing first: the draft belongs to the row being
         // deleted, so applying it would rename a source on its way out.
-        sourceIDDraft = selectedSourceID.map(SourceIDDraft.init(id:))
-        renameError = nil
+        select(config.sources.first.flatMap { sourceHandles.handle(of: $0.id) })
         pendingRename = nil
     }
 
-    func moveSources(from offsets: IndexSet, to destination: Int) {
-        guard var config = editingConfig else { return }
+    /// A drop carries offsets into the list as it looked when the drag started.
+    /// Applying them to a list that has since changed traps, so a move that does
+    /// not fit is ignored.
+    /// A drop carries offsets into the list as it looked when the drag started,
+    /// so `rendered` carries that list's identities with it. A drop against a
+    /// list that has changed since is ignored: its offsets would still be in
+    /// range and would name rows the user never dragged.
+    func moveSources(from offsets: IndexSet, to destination: Int, rendered: [SourceHandle]) {
+        guard var config = editingConfig,
+              SourceOrder.canMove(
+                  fromOffsets: offsets, toOffset: destination,
+                  rendered: rendered, current: sourceRows.map(\.id)
+              )
+        else { return }
         config.sources.move(fromOffsets: offsets, toOffset: destination)
         editingConfig = config
     }
 
+    /// The selected source's current config id, for display and for the parts
+    /// of the form that still speak ids.
+    var selectedSourceID: String? {
+        sourceHandles.resolve(selectedSource)?.id
+    }
+
+    /// The identity currently naming `id`, so a list rendered from the config
+    /// can hand its rows an identity.
+    func handle(of sourceID: String) -> SourceHandle? {
+        sourceHandles.handle(of: sourceID)
+    }
+
+    /// The source list to render, each row already carrying its identity, so
+    /// the list's selection is an identity rather than an id.
+    var sourceRows: [SourceRow] {
+        (editingConfig?.sources ?? []).compactMap { source in
+            sourceHandles.handle(of: source.id).map { SourceRow(id: $0, source: source) }
+        }
+    }
+
+    /// The source `handle` names, or nil once it is gone.
+    func source(for handle: SourceHandle?) -> SourceConfig? {
+        guard let id = sourceHandles.resolve(handle)?.id else { return nil }
+        return editingConfig?.sources.first { $0.id == id }
+    }
+
     // MARK: Renaming a source
+
+    /// Points every per-source editor at `handle`.
+    ///
+    /// The only place `selectedSource` is assigned. Each draft belongs to the
+    /// source that was selected when it was typed, so a selection change has to
+    /// retire all of them together; doing that in each caller is what let
+    /// `addSource` and `removeSelectedSource` move the selection with a filter
+    /// draft still in hand.
+    ///
+    /// - Parameters:
+    ///   - committingRename: commit a dirty id draft before moving. False where
+    ///     the draft belongs to a row on its way out, or has already landed.
+    ///   - keepingFilterDrafts: for a rename, which is the same row under a new
+    ///     name rather than a different row.
+    private func select(
+        _ handle: SourceHandle?,
+        committingRename: Bool = false,
+        keepingFilterDrafts: Bool = false
+    ) {
+        if committingRename, commitSourceIDDraft().blocksAction {
+            // The name cannot be applied, so the move does not happen: the typed
+            // text stays in the field and the reason stays under it. Moving on
+            // would take both away, which is the one thing this draft exists to
+            // prevent. The list wrote the new selection before this ran, so put
+            // it back.
+            selectedSource = sourceNameDraft.pending?.handle
+            return
+        }
+        selectedSource = handle
+        sourceNameDraft.seed(handle, id: sourceHandles.resolve(handle)?.id)
+        if !keepingFilterDrafts {
+            titleFilterDrafts.removeAll()
+        }
+        renameError = nil
+    }
 
     /// Points the draft at `sourceID`, committing whatever was being typed
     /// first.
@@ -572,12 +670,8 @@ extension MenuBarModel {
     /// discard a half-typed name — and cannot carry it over to the row the user
     /// just clicked either, since the draft resolves against its own
     /// `committedID` rather than against the selection.
-    func seedSourceIDDraft(for sourceID: String?) {
-        if sourceIDDraft?.isDirty == true {
-            commitSourceIDDraft()
-        }
-        renameError = nil
-        sourceIDDraft = sourceID.map(SourceIDDraft.init(id:))
+    func seedSourceIDDraft(for handle: SourceHandle?) {
+        select(handle, committingRename: true)
     }
 
     /// Judges the accumulated draft text once, on commit — Enter, leaving the
@@ -586,9 +680,31 @@ extension MenuBarModel {
     /// Never on a keystroke: doing that made the first differing character
     /// count as a rename, so the warning opened mid-word and confirming it
     /// committed a partial id, orphaning every event under the real one.
-    func commitSourceIDDraft() {
-        guard let draft = sourceIDDraft, let config = editingConfig else { return }
-        guard let index = config.sources.firstIndex(where: { $0.id == draft.committedID }) else { return }
+    ///
+    /// Judges the name field on behalf of the source that owns it, whoever
+    /// asked. The form's own commit points — saving, switching rows, adding a
+    /// source — go through here.
+    ///
+    /// The result is not discardable. A refused name has to stop the action that
+    /// triggered the commit, and `renameError` cannot do that: a caller that
+    /// does not read it carries on regardless, which is how adding a source used
+    /// to swallow a refusal and how switching rows used to discard the typed
+    /// name along with it.
+    func commitSourceIDDraft() -> SourceNameCommit {
+        // An open confirmation outranks whatever the field says now. Re-judging
+        // the text can report `settled` — a retained setter putting the original
+        // name back is enough — while the alert is still on screen waiting for
+        // an answer about a rename nobody has withdrawn.
+        if pendingRename != nil {
+            return .awaitingConfirmation
+        }
+        guard let pending = sourceNameDraft.pending, let config = editingConfig,
+              // The field's own source, not whatever currently answers to the
+              // id it was seeded with.
+              let source = sourceHandles.resolve(pending.handle),
+              let index = config.sources.firstIndex(where: { $0.id == source.id })
+        else { return .settled }
+        let draft = pending.draft
         let others = config.sources.enumerated()
             .filter { $0.offset != index }
             .map(\.element.id)
@@ -596,21 +712,25 @@ extension MenuBarModel {
         switch draft.commit(savedSourceIDs: savedSourceIDs, otherSourceIDs: others) {
         case .unchanged:
             renameError = nil
-            sourceIDDraft?.revert() // normalizes away stray whitespace
+            sourceNameDraft.revert() // normalizes away stray whitespace
+            return .settled
         case let .rejected(reason):
             renameError = reason
+            return .rejected(reason: reason)
         case let .apply(newID):
             renameError = nil
-            applyRename(at: index, to: newID)
+            applyRename(source.handle, to: newID)
+            return .renamed(newID)
         case let .confirm(from, to):
             renameError = nil
-            pendingRename = PendingRename(index: index, from: from, to: to)
+            pendingRename = PendingRename(source: source.handle, from: from, to: to)
+            return .awaitingConfirmation
         }
     }
 
     func confirmPendingRename() {
         guard let rename = pendingRename else { return }
-        applyRename(at: rename.index, to: rename.to)
+        applyRename(rename.source, to: rename.to)
         pendingRename = nil
     }
 
@@ -618,19 +738,217 @@ extension MenuBarModel {
     /// never shows a name that was not applied.
     func cancelPendingRename() {
         pendingRename = nil
-        sourceIDDraft?.revert()
+        sourceNameDraft.revert()
     }
 
-    private func applyRename(at index: Int, to newID: String) {
-        guard var config = editingConfig, config.sources.indices.contains(index) else { return }
-        let oldID = config.sources[index].id
+    private func applyRename(_ handle: SourceHandle, to newID: String) {
+        guard var config = editingConfig,
+              let oldID = sourceHandles.id(of: handle),
+              let index = config.sources.firstIndex(where: { $0.id == oldID }) else { return }
         if let originalID = sourceOrigins.removeValue(forKey: oldID) {
             sourceOrigins[newID] = originalID
         }
         config.sources[index].id = newID
         editingConfig = config
-        selectedSourceID = newID
-        sourceIDDraft?.markCommitted(newID)
+        // Only the id moves. Everything the form keyed by this source — its
+        // drafts, its row identities — is keyed by the handle, which a rename
+        // does not touch, so there is nothing to carry across.
+        sourceHandles.rename(handle, to: newID)
+        select(handle, keepingFilterDrafts: true)
+    }
+
+    // MARK: Title filters
+
+    /// What the name field shows for `handle`: its own typing, or the source's
+    /// current id when the field belongs to a different source.
+    func sourceName(of handle: SourceHandle) -> String {
+        sourceNameDraft.text(of: handle, fallback: sourceHandles.id(of: handle) ?? "")
+    }
+
+    /// Records typing in the name field. Ignored unless `handle` owns it, so a
+    /// setter retained from another source cannot rename the one on screen.
+    func setSourceName(_ text: String, of handle: SourceHandle) {
+        guard sourceHandles.id(of: handle) != nil else { return }
+        sourceNameDraft.setText(text, of: handle)
+    }
+
+    /// Commits the name field on behalf of `handle` — Return, or the field
+    /// losing focus. Ignored unless that source owns the field.
+    func commitSourceName(of handle: SourceHandle) {
+        guard sourceNameDraft.draft(of: handle) != nil else { return }
+        // Nothing follows this commit, and a refusal is already rendered under
+        // the field it came from, so there is nothing for the outcome to stop.
+        _ = commitSourceIDDraft()
+    }
+
+    /// Applies `change` to the source `handle` names, or does nothing once that
+    /// source is gone.
+    ///
+    /// The view builds its controls around a source, and neither its position
+    /// nor its id survives editing: a position shifts when the list changes, and
+    /// an id can be renamed or taken by a later source. A control still holding
+    /// a retired handle resolves to nothing and is ignored.
+    func updateSource(_ handle: SourceHandle, _ change: (inout SourceConfig) -> Void) {
+        guard let id = sourceHandles.id(of: handle),
+              let index = editingConfig?.sources.firstIndex(where: { $0.id == id }) else { return }
+        change(&editingConfig!.sources[index])
+    }
+
+    /// Every title-filter method takes a source handle, for the same reason.
+    func titleFilterEntries(_ field: TitleFilterField, of handle: SourceHandle) -> [String] {
+        guard let id = sourceHandles.id(of: handle) else { return [] }
+        return editingConfig?.sources.first { $0.id == id }?[keyPath: field.keyPath] ?? []
+    }
+
+    /// The draft reads and writes name their source, like every other operation
+    /// here. The selection decides what the form RENDERS; it must never decide
+    /// what an operation ACTS on, or a callback arriving from one source's
+    /// controls works on whichever source is selected by then.
+    func titleFilterDraft(_ field: TitleFilterField, of handle: SourceHandle) -> String {
+        titleFilterDrafts.text(field.rawValue, of: handle)
+    }
+
+    /// Ignored once `handle` is retired: a field built before a rename or a
+    /// removal must not be able to re-own the draft.
+    func setTitleFilterDraft(_ field: TitleFilterField, to text: String, of handle: SourceHandle) {
+        titleFilterDrafts.setText(text, field.rawValue, of: handle, in: sourceHandles)
+    }
+
+    func titleFilterDraftCheck(_ field: TitleFilterField, of handle: SourceHandle) -> TitleFilterEntry.Check {
+        TitleFilterEntry.check(
+            titleFilterDraft(field, of: handle), against: titleFilterEntries(field, of: handle)
+        )
+    }
+
+    /// The rows to render, each carrying an identity that outlives its
+    /// position.
+    func titleFilterRows(_ field: TitleFilterField, of handle: SourceHandle) -> [TitleFilterRow] {
+        titleFilterRowIDs.rows(
+            list(field, handle), entries: titleFilterEntries(field, of: handle)
+        )
+    }
+
+    /// Adds what is in the field's draft to the source `handle` names. Silent
+    /// when the draft is not addable — the button that calls this is disabled in
+    /// that state, and the reason is already on screen.
+    ///
+    /// The add and the clear travel together, taking one resolved source, so no
+    /// arrangement of callbacks can add to one source and clear another.
+    func addTitleFilter(_ field: TitleFilterField, to handle: SourceHandle) {
+        guard let sources = editingConfig?.sources,
+              let source = sourceHandles.resolve(handle),
+              let committed = TitleFilterEntry.committingDraft(
+                  field.rawValue, to: field.keyPath, of: source,
+                  in: sources, drafts: titleFilterDrafts
+              ) else { return }
+        editingConfig?.sources = committed.sources
+        titleFilterDrafts = committed.drafts
+        titleFilterRowIDs.appended(to: list(field, handle))
+    }
+
+    /// Rewrites one row as the user types in it.
+    ///
+    /// Addressed by row identity within a source addressed by its handle: a
+    /// commit can arrive after its row moved, or after its source was renamed or
+    /// deleted, and either resolves to nothing rather than to a neighbour.
+    func setTitleFilterEntry(
+        _ text: String, _ field: TitleFilterField, of handle: SourceHandle, row id: TitleFilterRowID
+    ) {
+        guard let sources = editingConfig?.sources,
+              let sourceID = sourceHandles.id(of: handle),
+              let row = position(of: id, field, handle),
+              let updated = TitleFilterEntry.setting(
+                  text, at: row, in: field.keyPath, ofSourceWith: sourceID, in: sources
+              ) else { return }
+        editingConfig?.sources = updated
+    }
+
+    func removeTitleFilter(_ field: TitleFilterField, from handle: SourceHandle, row id: TitleFilterRowID) {
+        guard let sources = editingConfig?.sources,
+              let sourceID = sourceHandles.id(of: handle),
+              let row = position(of: id, field, handle),
+              let updated = TitleFilterEntry.removing(
+                  at: row, from: field.keyPath, ofSourceWith: sourceID, in: sources
+              ) else { return }
+        editingConfig?.sources = updated
+        titleFilterRowIDs.removed(at: row, from: list(field, handle))
+    }
+
+    /// Why the row identified by `id` cannot be saved, or nil.
+    ///
+    /// Resolved by identity like every other row operation, so the caption a
+    /// row shows always describes that row.
+    func titleFilterRowMessage(
+        _ field: TitleFilterField, of handle: SourceHandle, row id: TitleFilterRowID
+    ) -> String? {
+        let entries = titleFilterEntries(field, of: handle)
+        guard let row = position(of: id, field, handle), entries.indices.contains(row) else { return nil }
+        return TitleFilterEntry.message(
+            for: TitleFilterEntry.checkRow(entries[row], against: entries, excluding: row)
+        )
+    }
+
+    private func list(_ field: TitleFilterField, _ handle: SourceHandle) -> TitleFilterRowIDs.List {
+        TitleFilterRowIDs.List(source: handle, field: field.rawValue)
+    }
+
+    private func position(
+        of id: TitleFilterRowID, _ field: TitleFilterField, _ handle: SourceHandle
+    ) -> Int? {
+        titleFilterRowIDs.position(
+            of: id, in: list(field, handle), count: titleFilterEntries(field, of: handle).count
+        )
+    }
+
+    /// Gives every list on screen an identity per row. Idempotent, so calling
+    /// it again cannot re-key a row under a live text field.
+    private func seedTitleFilterRowIDs() {
+        guard let config = editingConfig else { return }
+        for source in config.sources {
+            guard let handle = sourceHandles.handle(of: source.id) else { continue }
+            for field in TitleFilterField.allCases {
+                titleFilterRowIDs.seed(
+                    list(field, handle), count: source[keyPath: field.keyPath].count
+                )
+            }
+        }
+    }
+
+    /// Trims every entry, the way the add field already does.
+    ///
+    /// Run at the save commit point rather than per keystroke, so a space typed
+    /// mid-word is not eaten while the user is still typing.
+    func normalizeTitleFilters() {
+        guard var config = editingConfig else { return }
+        for index in config.sources.indices {
+            for field in TitleFilterField.allCases {
+                config.sources[index][keyPath: field.keyPath] = TitleFilterEntry.normalized(
+                    config.sources[index][keyPath: field.keyPath]
+                )
+            }
+        }
+        editingConfig = config
+    }
+
+    /// Why the title filters cannot be saved yet, or nil. Covers both a row
+    /// edited to blank in place and a draft typed but never added: dropping
+    /// either one silently at save time is the failure this guards.
+    var titleFilterProblem: String? {
+        guard let config = editingConfig else { return nil }
+        for source in config.sources {
+            for field in TitleFilterField.allCases {
+                if let problem = TitleFilterEntry.problem(in: source[keyPath: field.keyPath]) {
+                    return "\(field.errorLabel) for “\(source.id)”: \(problem)"
+                }
+            }
+        }
+        guard let selected = selectedSource, sourceHandles.id(of: selected) != nil else { return nil }
+        for field in TitleFilterField.allCases {
+            if let message = TitleFilterEntry.message(for: titleFilterDraftCheck(field, of: selected)) {
+                return "\(field.errorLabel): \(message)"
+            }
+        }
+        return nil
     }
 
     // MARK: Saving
@@ -641,12 +959,32 @@ extension MenuBarModel {
         // Save is a commit point for the id field too. Without this, a name
         // typed but never submitted is silently dropped by the save it looks
         // like it was part of.
-        if sourceIDDraft?.isDirty == true {
-            commitSourceIDDraft()
+        if commitSourceIDDraft().blocksAction {
+            return
         }
         // A refused id or an open warning has to be resolved first, otherwise
         // saving writes the old id while the field still shows the new one.
         guard renameError == nil, pendingRename == nil else { return }
+
+        // Same commit point for the list editors: an entry typed but never
+        // added would otherwise vanish with the save that looked like it
+        // included it.
+        if let selected = selectedSource {
+            for field in TitleFilterField.allCases {
+                addTitleFilter(field, to: selected)
+            }
+        }
+        // A row edited in place never went through `adding`, so this is where
+        // its padding comes off. Before the problem check, since trimming can
+        // turn "   " into an empty row that must refuse the save.
+        normalizeTitleFilters()
+        // Never reachable through the form, which disables Save on a problem —
+        // but the writer's validation would name a config field rather than the
+        // row that caused it, so the readable message is produced here.
+        if let problem = titleFilterProblem {
+            saveError = problem
+            return
+        }
 
         guard let config = editingConfig else { return }
         do {
@@ -669,8 +1007,81 @@ extension MenuBarModel {
     }
 }
 
+/// Which of a source's two title-filter lists a control is editing.
+enum TitleFilterField: String, CaseIterable, Hashable {
+    case matches
+    case excludes
+
+    var keyPath: WritableKeyPath<SourceConfig, [String]> {
+        switch self {
+        case .matches: \.titleMatches
+        case .excludes: \.titleExcludes
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .matches: "Only mirror titles containing"
+        case .excludes: "Never mirror titles containing"
+        }
+    }
+
+    /// What an empty list means for THIS list.
+    ///
+    /// Scoped to the one filter, because the two of them compose: an empty
+    /// only-mirror list drops its own gate, it does not promise that every
+    /// event is mirrored — the never-mirror list, the weekday and duration
+    /// rules, and the all-day setting all still apply.
+    var emptyMeaning: String {
+        switch self {
+        case .matches: "Empty: this list does not filter anything out."
+        case .excludes: "Empty: this list does not exclude anything."
+        }
+    }
+
+    /// Names the list in a control's accessibility label. Both lists have a
+    /// `+` and a row of `−` buttons, and "Add entry" on each says nothing about
+    /// which list is being added to.
+    var accessibilityName: String {
+        switch self {
+        case .matches: "only-mirror list"
+        case .excludes: "never-mirror list"
+        }
+    }
+
+    /// Names the list in a message that appears away from it, in the footer.
+    var errorLabel: String {
+        switch self {
+        case .matches: "Only-mirror list"
+        case .excludes: "Never-mirror list"
+        }
+    }
+
+    /// The add field's prompt.
+    ///
+    /// Never a plausible entry: `"1:1"` as placeholder text sat directly under
+    /// a real `1:1` row and read as a second one. The two fields also differ
+    /// from each other, so a screenshot of the pair is unambiguous.
+    var addPlaceholder: String {
+        switch self {
+        case .matches: "Add a word or phrase…"
+        case .excludes: "Add a word to exclude…"
+        }
+    }
+}
+
+/// One row of the source list: the source, and the identity the form addresses
+/// it by.
+struct SourceRow: Identifiable {
+    let id: SourceHandle
+    let source: SourceConfig
+}
+
 struct PendingRename: Equatable {
-    let index: Int
+    /// The source being renamed, by identity. A position would be stale by the
+    /// time the user answers the alert; so would the id, which is the thing
+    /// being changed.
+    let source: SourceHandle
     let from: String
     let to: String
 }
