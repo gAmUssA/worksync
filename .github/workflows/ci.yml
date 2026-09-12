@@ -196,13 +196,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release
     runs-on: ubuntu-latest
-    # Every release writes the same branch of the same tap. Two tags pushed
-    # close together would otherwise check out the same HEAD and the second
-    # push would be rejected, leaving the newer release published with a stale
-    # cask. cancel-in-progress stays false: cancelling would drop a bump whose
-    # release already succeeded.
+    # Serialize reruns of the same tag without letting another release replace
+    # its pending bump. Different tags can run concurrently; the version guards
+    # and push retry below handle updates to the shared tap branch.
     concurrency:
-      group: bump-homebrew-tap
+      group: bump-homebrew-tap-${{ github.ref_name }}
       cancel-in-progress: false
     steps:
       # Same shape as the signing-secret gate above: do the real thing when the
@@ -237,7 +235,7 @@ jobs:
       # must describe the bytes users actually download. Re-hashing a local
       # artifact would pass here and fail on every user's machine if the
       # upload differed for any reason.
-      - name: Bump the cask to the released version
+      - name: Bump and push the cask to the released version
         if: steps.token.outputs.present == 'true'
         env:
           TAG: ${{ github.ref_name }}
@@ -250,52 +248,46 @@ jobs:
           SHA=$(shasum -a 256 released.tar.gz | awk '{print $1}')
           echo "version=$VERSION sha256=$SHA"
 
-          CASK=tap/Casks/worksync.rb
-
-          # Before touching the file, not only after a rejected push. The
-          # concurrency lock means a queued run checks out AFTER the previous
-          # one pushed, so an out-of-order older tag would see the newer cask,
-          # rewrite it downward and push fast-forward with nothing to reject.
-          CURRENT=$(sed -nE 's|^  version "([^"]*)"$|\1|p' "$CASK")
-          NEWEST=$(printf '%s\n%s\n' "$VERSION" "$CURRENT" | sort -V | tail -1)
-          if [ "$CURRENT" != "$VERSION" ] && [ "$NEWEST" = "$CURRENT" ]; then
-            echo "::notice::Tap carries ${CURRENT}, newer than ${VERSION}. Leaving it alone."
-            exit 0
-          fi
-
-          # Anchored to the specific keys so nothing else in the file can match.
-          sed -i -E "s|^  version \"[^\"]*\"$|  version \"${VERSION}\"|" "$CASK"
-          sed -i -E "s|^  sha256 \"[^\"]*\"$|  sha256 \"${SHA}\"|" "$CASK"
-
-          # A sed that matched nothing leaves the file unchanged and would
-          # otherwise commit nothing and pass silently.
-          grep -q "version \"${VERSION}\"" "$CASK" || {
-            echo "::error::cask version was not updated to ${VERSION}" >&2; exit 1; }
-          grep -q "sha256 \"${SHA}\"" "$CASK" || {
-            echo "::error::cask sha256 was not updated" >&2; exit 1; }
-
-          ruby -c "$CASK"
-
-      - name: Commit and push the bump
-        if: steps.token.outputs.present == 'true'
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
           cd tap
-          VERSION="${TAG#v}"
-          if git diff --quiet; then
-            echo "Cask already at ${VERSION} — nothing to push."
-            exit 0
-          fi
+          CASK=Casks/worksync.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/worksync.rb
-          git commit -m "WorkSync cask ${VERSION}"
 
-          # The concurrency group serializes this repo's own runs; the retry
-          # additionally covers anyone pushing to the tap by hand.
-          for attempt in 1 2 3; do
+          # Rebuild each attempt from the current tap rather than rebasing
+          # competing edits to the same version and sha256 lines.
+          # Bounded well above the number of releases that could realistically
+          # contend: each rejection costs one fetch and one rebuild, and the
+          # ordering guard makes a stale older tag exit on its first rejection
+          # rather than consume an attempt from anyone else.
+          for attempt in $(seq 1 8); do
+            # Check before editing as well as after a rejected push: an older
+            # release must never downgrade a newer cask with a fast-forward.
+            CURRENT=$(sed -nE 's|^  version "([^"]*)"$|\1|p' "$CASK")
+            NEWEST=$(printf '%s\n%s\n' "$VERSION" "$CURRENT" | sort -V | tail -1)
+            if [ "$CURRENT" != "$VERSION" ] && [ "$NEWEST" = "$CURRENT" ]; then
+              echo "::notice::Tap carries ${CURRENT}, newer than ${VERSION}. Leaving it alone."
+              exit 0
+            fi
+
+            # Anchored to the specific keys so nothing else in the file can match.
+            sed -i -E "s|^  version \"[^\"]*\"$|  version \"${VERSION}\"|" "$CASK"
+            sed -i -E "s|^  sha256 \"[^\"]*\"$|  sha256 \"${SHA}\"|" "$CASK"
+
+            # A sed that matched nothing leaves the file unchanged and would
+            # otherwise commit nothing and pass silently.
+            grep -q "version \"${VERSION}\"" "$CASK" || {
+              echo "::error::cask version was not updated to ${VERSION}" >&2; exit 1; }
+            grep -q "sha256 \"${SHA}\"" "$CASK" || {
+              echo "::error::cask sha256 was not updated" >&2; exit 1; }
+
+            ruby -c "$CASK"
+
+            if git diff --quiet; then
+              echo "Cask already at ${VERSION} — nothing to push."
+              exit 0
+            fi
+            git add "$CASK"
+            git commit -m "WorkSync cask ${VERSION}"
             if git push; then
               echo "Pushed cask ${VERSION} on attempt ${attempt}."
               exit 0
@@ -304,11 +296,8 @@ jobs:
             echo "Push rejected — inspecting the tap's current state."
             git fetch origin
 
-            # actions/checkout creates refs/remotes/origin/<branch> but no
-            # origin/HEAD, so name the branch rather than relying on it.
+            # actions/checkout creates origin/<branch> but no origin/HEAD.
             BRANCH=$(git rev-parse --abbrev-ref HEAD)
-
-            # Re-check the same ordering rule against what landed meanwhile.
             THEIRS=$(git show "origin/${BRANCH}:Casks/worksync.rb" \
               | sed -nE 's|^  version "([^"]*)"$|\1|p')
             NEWEST=$(printf '%s\n%s\n' "$VERSION" "$THEIRS" | sort -V | tail -1)
@@ -317,9 +306,14 @@ jobs:
               exit 0
             fi
 
-            git rebase "origin/${BRANCH}"
+            # This checkout is disposable. Keep the downloaded asset's VERSION
+            # and SHA in this step and reapply them on the fetched state.
+            # Stagger retries so simultaneous contenders do not collide again
+            # on the same tick.
+            sleep $(( (RANDOM % 5) + attempt ))
+            git reset --hard "origin/${BRANCH}"
           done
 
-          echo "::error::Could not push the cask bump for ${VERSION} after 3 attempts. \
+          echo "::error::Could not push the cask bump for ${VERSION} after 8 attempts. \
           Update gAmUssA/homebrew-worksync by hand." >&2
           exit 1
