@@ -330,9 +330,11 @@ struct SettingsView: View {
                         .accessibilityLabel("Remove entry")
                     }
                     // Live, because a row can be emptied in place and the user
-                    // should see why Save went away.
+                    // should see why Save went away. `checkRow`, not `check`:
+                    // an emptied row is an error, where an empty add field is
+                    // just an add field nobody has typed into yet.
                     if let message = TitleFilterEntry.message(
-                        for: TitleFilterEntry.check(entries[row], against: entries, excluding: row)
+                        for: TitleFilterEntry.checkRow(entries[row], against: entries, excluding: row)
                     ) {
                         Text(message).font(.caption).foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
@@ -379,7 +381,10 @@ struct SettingsView: View {
 
     private var footer: some View {
         HStack {
-            if let message = model.saveError ?? model.titleFilterProblem {
+            if let message = SettingsMessagePolicy.footerMessage(
+                validationProblem: model.titleFilterProblem,
+                saveError: model.saveError
+            ) {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)

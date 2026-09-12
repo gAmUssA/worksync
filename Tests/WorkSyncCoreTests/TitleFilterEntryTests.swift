@@ -107,6 +107,41 @@ final class TitleFilterEntryTests: XCTestCase {
         XCTAssertNoThrow(try ConfigLoader.validate(config))
     }
 
+    // MARK: A row emptied in place
+
+    /// `check` is right to stay silent on an empty add field — nobody has typed
+    /// into it yet. A row is different: the user deleted its text, `problem`
+    /// refuses the save because of it, and with no message the form shows a
+    /// greyed-out Save button and no reason.
+    func testAnEmptiedRowReportsAReasonWhileAnEmptyAddFieldStaysSilent() {
+        XCTAssertEqual(TitleFilterEntry.check("", against: ["lunch"]), .empty)
+        XCTAssertNil(TitleFilterEntry.message(for: TitleFilterEntry.check("", against: ["lunch"])))
+
+        XCTAssertEqual(TitleFilterEntry.checkRow("", against: ["lunch", ""], excluding: 1), .blank)
+        XCTAssertEqual(
+            TitleFilterEntry.message(for: TitleFilterEntry.checkRow("", against: ["lunch", ""], excluding: 1)),
+            "An entry cannot be blank — it would match every title."
+        )
+    }
+
+    func testTheRowMessageMatchesWhatBlocksTheSave() {
+        // Whatever `problem` refuses, the row that caused it must be able to
+        // say so — otherwise Save greys out with nothing to read.
+        for entries in [["lunch", ""], ["lunch", "   "], ["lunch", "LUNCH"]] {
+            let problem = try? XCTUnwrap(TitleFilterEntry.problem(in: entries))
+            XCTAssertNotNil(problem, "\(entries) should refuse the save")
+            let rowMessages = entries.indices.compactMap {
+                TitleFilterEntry.message(for: TitleFilterEntry.checkRow(entries[$0], against: entries, excluding: $0))
+            }
+            XCTAssertFalse(rowMessages.isEmpty, "no row explains why \(entries) cannot be saved")
+        }
+    }
+
+    func testCheckRowStillAcceptsAGoodRowAndCatchesADuplicate() {
+        XCTAssertEqual(TitleFilterEntry.checkRow("lunch", against: ["lunch", "gym"], excluding: 0), .valid("lunch"))
+        XCTAssertEqual(TitleFilterEntry.checkRow("gym", against: ["lunch", "gym"], excluding: 0), .duplicate("gym"))
+    }
+
     // MARK: Trimming a row edited in place
 
     func testNormalizedTrimsEveryEntry() {

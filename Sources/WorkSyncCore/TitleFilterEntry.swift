@@ -52,6 +52,19 @@ public enum TitleFilterEntry {
         return .valid(candidate)
     }
 
+    /// Judges an entry that is already in the list.
+    ///
+    /// Identical to `check` except that an empty row counts as blank. The add
+    /// field starts empty by definition, so `.empty` is silent there — but a
+    /// row the user has deleted every character from is as unusable as one
+    /// holding spaces, and `problem(in:)` refuses the save either way. Without
+    /// this the user gets a greyed-out Save button and no red caption saying
+    /// which row caused it.
+    public static func checkRow(_ text: String, against entries: [String], excluding index: Int?) -> Check {
+        let result = check(text, against: entries, excluding: index)
+        return result == .empty ? .blank : result
+    }
+
     /// What to show the user, or nil when there is nothing to say.
     public static func message(for check: Check) -> String? {
         switch check {

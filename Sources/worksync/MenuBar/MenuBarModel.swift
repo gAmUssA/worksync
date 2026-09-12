@@ -73,10 +73,10 @@ final class MenuBarModel {
     /// Ids that exist in the saved file, so a rename of a brand-new source
     /// does not warn about orphaning events that cannot exist yet.
     var savedSourceIDs: Set<String> = []
-    /// What is typed into each title-filter list's "add" field, held here and
-    /// cleared on a selection change so a half-typed entry cannot follow the
-    /// user to a different source.
-    var titleFilterDrafts: [TitleFilterField: String] = [:]
+    /// What is typed into each title-filter list's "add" field. The value
+    /// remembers which source it was typed for, so a half-typed entry cannot
+    /// follow the user to a different one even if a path forgets to clear it.
+    var titleFilterDrafts = TitleFilterDrafts()
 
     var isPaused: Bool {
         didSet {
@@ -471,11 +471,8 @@ extension MenuBarModel {
             return
         }
         settingsBlocked = nil
-        titleFilterDrafts = [:]
         loadCalendarChoices()
-        selectedSourceID = editingConfig?.sources.first?.id
-        sourceIDDraft = selectedSourceID.map(SourceIDDraft.init(id:))
-        renameError = nil
+        select(editingConfig?.sources.first?.id)
         saveError = nil
         saveWarning = nil
         screen = .settings
@@ -488,7 +485,7 @@ extension MenuBarModel {
         pendingRename = nil
         sourceIDDraft = nil
         renameError = nil
-        titleFilterDrafts = [:]
+        titleFilterDrafts.removeAll()
     }
 
     /// Account/calendar choices for the popups, from the same enumeration
@@ -544,9 +541,9 @@ extension MenuBarModel {
         let calendar = calendarChoices(inAccount: account).first ?? ""
         config.sources.append(SourceConfig(id: name, account: account, calendar: calendar))
         editingConfig = config
-        selectedSourceID = name
-        sourceIDDraft = SourceIDDraft(id: name)
-        renameError = nil
+        // The dirty id draft was already committed above, while the list still
+        // looked the way the user left it.
+        select(name)
     }
 
     func removeSelectedSource() {
@@ -555,11 +552,9 @@ extension MenuBarModel {
         config.sources.remove(at: index)
         sourceOrigins.removeValue(forKey: selected)
         editingConfig = config
-        selectedSourceID = config.sources.first?.id
-        // Deliberately not committed first: the draft belongs to the row being
+        // Deliberately not committing first: the draft belongs to the row being
         // deleted, so applying it would rename a source on its way out.
-        sourceIDDraft = selectedSourceID.map(SourceIDDraft.init(id:))
-        renameError = nil
+        select(config.sources.first?.id)
         pendingRename = nil
     }
 
@@ -571,6 +566,35 @@ extension MenuBarModel {
 
     // MARK: Renaming a source
 
+    /// Points every per-source editor at `id`.
+    ///
+    /// The only place `selectedSourceID` is assigned. Each draft belongs to the
+    /// source that was selected when it was typed, so a selection change has to
+    /// retire all of them together; doing that in each caller is what let
+    /// `addSource` and `removeSelectedSource` move the selection with a filter
+    /// draft still in hand.
+    ///
+    /// - Parameters:
+    ///   - committingRename: commit a dirty id draft before moving. False where
+    ///     the draft belongs to a row on its way out, or has already landed.
+    ///   - keepingFilterDrafts: for a rename, which is the same row under a new
+    ///     name rather than a different row.
+    private func select(
+        _ id: String?,
+        committingRename: Bool = false,
+        keepingFilterDrafts: Bool = false
+    ) {
+        if committingRename, sourceIDDraft?.isDirty == true {
+            commitSourceIDDraft()
+        }
+        selectedSourceID = id
+        sourceIDDraft = id.map(SourceIDDraft.init(id:))
+        if !keepingFilterDrafts {
+            titleFilterDrafts.removeAll()
+        }
+        renameError = nil
+    }
+
     /// Points the draft at `sourceID`, committing whatever was being typed
     /// first.
     ///
@@ -579,12 +603,7 @@ extension MenuBarModel {
     /// just clicked either, since the draft resolves against its own
     /// `committedID` rather than against the selection.
     func seedSourceIDDraft(for sourceID: String?) {
-        if sourceIDDraft?.isDirty == true {
-            commitSourceIDDraft()
-        }
-        renameError = nil
-        sourceIDDraft = sourceID.map(SourceIDDraft.init(id:))
-        titleFilterDrafts = [:]
+        select(sourceID, committingRename: true)
     }
 
     /// Judges the accumulated draft text once, on commit — Enter, leaving the
@@ -636,8 +655,10 @@ extension MenuBarModel {
         }
         config.sources[index].id = newID
         editingConfig = config
-        selectedSourceID = newID
-        sourceIDDraft?.markCommitted(newID)
+        // A rename is the same row under a new name, so what was typed into its
+        // filter fields is still the user's — it travels with the source.
+        titleFilterDrafts.rename(oldID, to: newID)
+        select(newID, keepingFilterDrafts: true)
     }
 
     // MARK: Title filters
@@ -647,11 +668,11 @@ extension MenuBarModel {
     }
 
     func titleFilterDraft(_ field: TitleFilterField) -> String {
-        titleFilterDrafts[field] ?? ""
+        titleFilterDrafts.text(field.rawValue, of: selectedSourceID)
     }
 
     func setTitleFilterDraft(_ field: TitleFilterField, to text: String) {
-        titleFilterDrafts[field] = text
+        titleFilterDrafts.setText(text, field.rawValue, of: selectedSourceID)
     }
 
     func titleFilterDraftCheck(_ field: TitleFilterField, ofSourceAt index: Int) -> TitleFilterEntry.Check {
@@ -666,7 +687,7 @@ extension MenuBarModel {
             titleFilterDraft(field), to: titleFilterEntries(field, ofSourceAt: index)
         ) else { return }
         editingConfig?.sources[index][keyPath: field.keyPath] = entries
-        titleFilterDrafts[field] = ""
+        titleFilterDrafts.clear(field.rawValue, of: selectedSourceID)
     }
 
     /// Trims every entry, the way the add field already does.
