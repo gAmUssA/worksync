@@ -175,8 +175,11 @@ struct SettingsView: View {
                 // Drag to reorder, because order decides dedup (SPEC §4.1).
                 // Selection is an identity, not an id: the id is editable and
                 // a removed one can be taken by a later source.
+                // The rows the drag's offsets will be computed against, held
+                // so the drop can be checked against the list it was drawn on.
+                let rows = model.sourceRows
                 List(selection: $model.selectedSource) {
-                    ForEach(model.sourceRows) { row in
+                    ForEach(rows) { row in
                         HStack {
                             Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
                             Text(row.source.id)
@@ -185,7 +188,7 @@ struct SettingsView: View {
                         }
                         .tag(row.id)
                     }
-                    .onMove { model.moveSources(from: $0, to: $1) }
+                    .onMove { model.moveSources(from: $0, to: $1, rendered: rows.map(\.id)) }
                 }
                 .frame(height: 110)
                 .scrollContentBackground(.hidden)

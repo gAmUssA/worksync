@@ -585,12 +585,16 @@ extension MenuBarModel {
     /// A drop carries offsets into the list as it looked when the drag started.
     /// Applying them to a list that has since changed traps, so a move that does
     /// not fit is ignored.
-    /// A drop carries offsets into the list as it looked when the drag started.
-    /// Applying them to a list that has since changed traps, so a move that does
-    /// not fit is ignored.
-    func moveSources(from offsets: IndexSet, to destination: Int) {
+    /// A drop carries offsets into the list as it looked when the drag started,
+    /// so `rendered` carries that list's identities with it. A drop against a
+    /// list that has changed since is ignored: its offsets would still be in
+    /// range and would name rows the user never dragged.
+    func moveSources(from offsets: IndexSet, to destination: Int, rendered: [SourceHandle]) {
         guard var config = editingConfig,
-              SourceOrder.canMove(config.sources, fromOffsets: offsets, toOffset: destination)
+              SourceOrder.canMove(
+                  fromOffsets: offsets, toOffset: destination,
+                  rendered: rendered, current: sourceRows.map(\.id)
+              )
         else { return }
         config.sources.move(fromOffsets: offsets, toOffset: destination)
         editingConfig = config
