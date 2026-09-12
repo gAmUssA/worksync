@@ -71,7 +71,9 @@ final class MenuBarModel {
     /// The id field's text while it is being edited, held apart from
     /// `editingConfig` so a rename is judged once on commit rather than on
     /// every keystroke.
-    var sourceIDDraft: SourceIDDraft?
+    /// The name field's text and the source it belongs to. A callback that does
+    /// not own the field cannot write to it.
+    private(set) var sourceNameDraft = SourceNameDraft()
     /// Why the typed id was refused, shown under the field.
     var renameError: String?
     /// Ids that exist in the saved file, so a rename of a brand-new source
@@ -84,9 +86,6 @@ final class MenuBarModel {
     /// Identities for the rows on screen, so an edit lands on the row it was
     /// typed into rather than on whatever has shifted into its position.
     private var titleFilterRowIDs = TitleFilterRowIDs()
-    /// The handle the id draft belongs to, assigned with the draft itself so a
-    /// rename cannot resolve against a source the user has since left.
-    private var sourceIDDraftHandle: SourceHandle?
 
     var isPaused: Bool {
         didSet {
@@ -495,12 +494,11 @@ extension MenuBarModel {
         editingConfig = nil
         sourceOrigins = [:]
         pendingRename = nil
-        sourceIDDraft = nil
+        sourceNameDraft.removeAll()
         renameError = nil
         titleFilterDrafts.removeAll()
         titleFilterRowIDs.removeAll()
         sourceHandles.removeAll()
-        sourceIDDraftHandle = nil
     }
 
     /// Account/calendar choices for the popups, from the same enumeration
@@ -541,7 +539,7 @@ extension MenuBarModel {
     func addSource() {
         // Before reading editingConfig: an uncommitted rename has to land (or
         // be refused) while the list still looks the way the user left it.
-        if sourceIDDraft?.isDirty == true {
+        if sourceNameDraft.isDirty {
             commitSourceIDDraft()
         }
         guard var config = editingConfig else { return }
@@ -577,8 +575,16 @@ extension MenuBarModel {
         pendingRename = nil
     }
 
+    /// A drop carries offsets into the list as it looked when the drag started.
+    /// Applying them to a list that has since changed traps, so a move that does
+    /// not fit is ignored.
+    /// A drop carries offsets into the list as it looked when the drag started.
+    /// Applying them to a list that has since changed traps, so a move that does
+    /// not fit is ignored.
     func moveSources(from offsets: IndexSet, to destination: Int) {
-        guard var config = editingConfig else { return }
+        guard var config = editingConfig,
+              SourceOrder.canMove(config.sources, fromOffsets: offsets, toOffset: destination)
+        else { return }
         config.sources.move(fromOffsets: offsets, toOffset: destination)
         editingConfig = config
     }
@@ -629,12 +635,11 @@ extension MenuBarModel {
         committingRename: Bool = false,
         keepingFilterDrafts: Bool = false
     ) {
-        if committingRename, sourceIDDraft?.isDirty == true {
+        if committingRename, sourceNameDraft.isDirty {
             commitSourceIDDraft()
         }
         selectedSource = handle
-        sourceIDDraftHandle = handle
-        sourceIDDraft = sourceHandles.resolve(handle).map { SourceIDDraft(id: $0.id) }
+        sourceNameDraft.seed(handle, id: sourceHandles.resolve(handle)?.id)
         if !keepingFilterDrafts {
             titleFilterDrafts.removeAll()
         }
@@ -658,12 +663,16 @@ extension MenuBarModel {
     /// Never on a keystroke: doing that made the first differing character
     /// count as a rename, so the warning opened mid-word and confirming it
     /// committed a partial id, orphaning every event under the real one.
+    /// Judges the name field on behalf of the source that owns it, whoever
+    /// asked. The form's own commit points — saving, switching rows, adding a
+    /// source — go through here.
     func commitSourceIDDraft() {
-        guard let draft = sourceIDDraft, let config = editingConfig,
-              // The draft's own source, not whatever currently answers to the
+        guard let pending = sourceNameDraft.pending, let config = editingConfig,
+              // The field's own source, not whatever currently answers to the
               // id it was seeded with.
-              let source = sourceHandles.resolve(sourceIDDraftHandle),
+              let source = sourceHandles.resolve(pending.handle),
               let index = config.sources.firstIndex(where: { $0.id == source.id }) else { return }
+        let draft = pending.draft
         let others = config.sources.enumerated()
             .filter { $0.offset != index }
             .map(\.element.id)
@@ -671,7 +680,7 @@ extension MenuBarModel {
         switch draft.commit(savedSourceIDs: savedSourceIDs, otherSourceIDs: others) {
         case .unchanged:
             renameError = nil
-            sourceIDDraft?.revert() // normalizes away stray whitespace
+            sourceNameDraft.revert() // normalizes away stray whitespace
         case let .rejected(reason):
             renameError = reason
         case let .apply(newID):
@@ -693,7 +702,7 @@ extension MenuBarModel {
     /// never shows a name that was not applied.
     func cancelPendingRename() {
         pendingRename = nil
-        sourceIDDraft?.revert()
+        sourceNameDraft.revert()
     }
 
     private func applyRename(_ handle: SourceHandle, to newID: String) {
@@ -713,6 +722,26 @@ extension MenuBarModel {
     }
 
     // MARK: Title filters
+
+    /// What the name field shows for `handle`: its own typing, or the source's
+    /// current id when the field belongs to a different source.
+    func sourceName(of handle: SourceHandle) -> String {
+        sourceNameDraft.text(of: handle, fallback: sourceHandles.id(of: handle) ?? "")
+    }
+
+    /// Records typing in the name field. Ignored unless `handle` owns it, so a
+    /// setter retained from another source cannot rename the one on screen.
+    func setSourceName(_ text: String, of handle: SourceHandle) {
+        guard sourceHandles.id(of: handle) != nil else { return }
+        sourceNameDraft.setText(text, of: handle)
+    }
+
+    /// Commits the name field on behalf of `handle` — Return, or the field
+    /// losing focus. Ignored unless that source owns the field.
+    func commitSourceName(of handle: SourceHandle) {
+        guard sourceNameDraft.draft(of: handle) != nil else { return }
+        commitSourceIDDraft()
+    }
 
     /// Applies `change` to the source `handle` names, or does nothing once that
     /// source is gone.
@@ -892,7 +921,7 @@ extension MenuBarModel {
         // Save is a commit point for the id field too. Without this, a name
         // typed but never submitted is silently dropped by the save it looks
         // like it was part of.
-        if sourceIDDraft?.isDirty == true {
+        if sourceNameDraft.isDirty {
             commitSourceIDDraft()
         }
         // A refused id or an open warning has to be resolved first, otherwise

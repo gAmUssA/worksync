@@ -39,13 +39,55 @@ final class TitleFilterDraftsTests: XCTestCase {
         XCTAssertEqual(drafts.text(matches, of: SourceHandle?.none), "")
     }
 
-    func testTypingForAnotherSourceRetiresTheOldDrafts() {
+    func testTypingForOneSourceDoesNotDisturbAnother() {
         var drafts = TitleFilterDrafts()
         drafts.setText("lunch", matches, of: handle("a"))
         drafts.setText("gym", excludes, of: handle("b"))
+
         XCTAssertEqual(drafts.text(excludes, of: handle("b")), "gym")
-        XCTAssertEqual(drafts.text(matches, of: handle("b")), "", "“a”'s draft must not survive into “b”'s form")
-        XCTAssertEqual(drafts.text(matches, of: handle("a")), "", "and it is gone, not merely hidden")
+        XCTAssertEqual(drafts.text(matches, of: handle("b")), "", "“b” has typed nothing into that field")
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "lunch", "and “a”'s own text is untouched")
+    }
+
+    /// The defect: two LIVE sources, so no retirement check could help. A setter
+    /// retained from the source the user left used to take ownership, and the
+    /// text they had just typed into the source on screen disappeared.
+    func testALateSetterFromAnotherLiveSourceCannotEraseTheCurrentDraft() {
+        var drafts = TitleFilterDrafts()
+        let a = handle("personal")
+        let b = handle("travel")
+
+        // The user selects B and types into it.
+        drafts.setText("B current draft", matches, of: b, in: handles)
+        // A's field, retained from before the switch, delivers late.
+        drafts.setText("late A draft", matches, of: a, in: handles)
+
+        XCTAssertEqual(drafts.text(matches, of: b), "B current draft", "the typed text must survive")
+        XCTAssertEqual(drafts.text(matches, of: a), "late A draft", "and A's text goes to A, where nobody reads it")
+    }
+
+    /// The reset policy, stated once: storage is per source, but a draft does
+    /// not outlive the user's attention. Moving the selection discards them all.
+    func testMovingTheSelectionIsWhatRetiresDrafts() {
+        var drafts = TitleFilterDrafts()
+        drafts.setText("lunch", matches, of: handle("a"))
+        drafts.setText("gym", matches, of: handle("b"))
+
+        drafts.removeAll()
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "")
+        XCTAssertEqual(drafts.text(matches, of: handle("b")), "")
+    }
+
+    func testARemovedSourcesDraftsDieWithIt() {
+        var drafts = TitleFilterDrafts()
+        let a = handle("a")
+        let b = handle("b")
+        drafts.setText("lunch", matches, of: a)
+        drafts.setText("gym", matches, of: b)
+
+        drafts.remove(a)
+        XCTAssertEqual(drafts.text(matches, of: a), "")
+        XCTAssertEqual(drafts.text(matches, of: b), "gym", "the other source keeps its own")
     }
 
     func testTheTwoFieldsOfOneSourceAreIndependent() {

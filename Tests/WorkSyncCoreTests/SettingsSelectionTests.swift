@@ -20,6 +20,7 @@ private struct Editor {
     var selected: SourceHandle?
     var drafts = TitleFilterDrafts()
     var rowIDs = TitleFilterRowIDs()
+    var nameField = SourceNameDraft()
 
     /// `MenuBarModel.openSettings`
     init(_ config: Config) {
@@ -55,6 +56,7 @@ private struct Editor {
     /// per-source drafts unless the move is a rename.
     mutating func select(_ handle: SourceHandle?, keepingDrafts: Bool = false) {
         selected = handle
+        nameField.seed(handle, id: handles.resolve(handle)?.id)
         if !keepingDrafts {
             drafts.removeAll()
         }
@@ -77,6 +79,27 @@ private struct Editor {
         rowIDs.removeSource(source.handle)
         handles.remove(source.handle)
         select(config.sources.first.flatMap { handles.handle(of: $0.id) })
+    }
+
+    /// `MenuBarModel.sourceName` / `setSourceName`
+    func name(of handle: SourceHandle) -> String {
+        nameField.text(of: handle, fallback: handles.id(of: handle) ?? "")
+    }
+
+    mutating func type(name text: String, into handle: SourceHandle) {
+        guard handles.id(of: handle) != nil else { return }
+        nameField.setText(text, of: handle)
+    }
+
+    /// `MenuBarModel.commitSourceName` + the `.apply` arm of
+    /// `commitSourceIDDraft`. Unsaved sources rename without a warning.
+    mutating func commitName(of handle: SourceHandle) {
+        guard let draft = nameField.draft(of: handle),
+              let source = handles.resolve(handle) else { return }
+        let others = config.sources.map(\.id).filter { $0 != source.id }
+        if case let .apply(newID) = draft.commit(savedSourceIDs: [], otherSourceIDs: others) {
+            rename(handle, to: newID)
+        }
     }
 
     /// `MenuBarModel.titleFilterDraft` / `setTitleFilterDraft`
@@ -222,6 +245,63 @@ final class SettingsSelectionTests: XCTestCase {
         editor.rename(personal, to: "home")
         XCTAssertEqual(editor.draft(of: personal), "standup", "a rename is not a change of source")
         XCTAssertEqual(editor.draft(of: editor.selected), "standup")
+    }
+
+    // MARK: The name field belongs to one source
+
+    /// The reviewer's reproduction, in order: retain A's name setter, select B,
+    /// deliver A's setter, commit. A must not be renamed, and neither must B.
+    func testALateNameSetterRenamesNeitherSource() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
+
+        editor.select(travel)
+        editor.type(name: "late-personal-name", into: personal)
+        editor.commitName(of: personal)
+
+        XCTAssertEqual(editor.source(for: personal)?.id, "personal", "A keeps its name")
+        XCTAssertEqual(editor.source(for: travel)?.id, "travel", "and B is not renamed to A's text")
+        XCTAssertEqual(editor.name(of: travel), "travel", "B's field shows B's own name")
+    }
+
+    func testALateNameSetterDoesNotStageARenameWarning() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
+
+        editor.select(travel)
+        editor.type(name: "late-personal-name", into: personal)
+
+        // Nothing to commit means nothing to warn about: the field belongs to
+        // travel, which has not been touched.
+        XCTAssertNil(editor.nameField.draft(of: personal))
+        XCTAssertFalse(editor.nameField.isDirty)
+    }
+
+    func testTheSelectedSourceCanStillBeRenamed() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+
+        editor.type(name: "home", into: personal)
+        editor.commitName(of: personal)
+        XCTAssertEqual(editor.source(for: personal)?.id, "home")
+        XCTAssertEqual(editor.selectedSourceID, "home")
+    }
+
+    /// A filter draft typed into the source on screen survives a late setter
+    /// from a source the user has left — both are live, so nothing about
+    /// removal can help here.
+    func testALateFilterSetterFromALiveSourceLeavesTheCurrentDraftAlone() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
+
+        editor.select(travel)
+        editor.type("B current draft", into: travel)
+        editor.type("late A draft", into: personal)
+
+        XCTAssertEqual(editor.draft(of: travel), "B current draft")
     }
 
     // MARK: A removed source

@@ -1,62 +1,53 @@
 import Foundation
 
-/// Text typed into a source's title-filter add fields, remembered together with
-/// the source it was typed for.
+/// Text typed into each source's title-filter add fields.
 ///
-/// Ownership is part of the value rather than something every caller has to
-/// remember to reset. A draft is readable only while its own source is
-/// selected, so a missed "clear on selection change" can cost the user their
-/// typing — it can never put a filter on a source they were not looking at.
+/// **Every source gets its own storage.** A draft used to be a single owner plus
+/// a guard — "whose text is this, and may that source still write?" — and that
+/// shape kept producing the same bug in new disguises. The guard could only ask
+/// whether a callback's source still existed, so two live sources defeated it: a
+/// late setter from the source the user had just left took ownership, and the
+/// text typed into the source they were looking at vanished.
 ///
-/// The owner is a `SourceHandle`, not a config id. An id is editable data: a
-/// late callback from a field built before a rename would otherwise re-own the
-/// draft under the OLD id, and the source the user is looking at would read an
-/// empty field and lose what they typed.
+/// Keyed by handle there is nothing to take. A late setter writes into its own
+/// source's slot, which nobody is reading, and the selected source's text is
+/// untouched by construction rather than by a check somebody has to remember.
 ///
-/// That is the failure this shape exists to make impossible. Clearing used to
-/// live in one function the view called when the selection changed, but adding
-/// and removing a source moved the selection themselves and left the id draft
-/// already pointing at the new row, so the view's change handler saw nothing to
-/// do and skipped the clear. The half-typed entry stayed in the field, and the
-/// save committed it to whichever source was selected by then.
+/// **Reset policy.** Drafts are per source, but they do not outlive the user's
+/// attention: moving the selection discards all of them (`removeAll`), which is
+/// the behaviour the form has always had — a half-typed entry belongs to the
+/// moment, and carrying it back would surprise a user who left it behind.
+/// Removing a source drops its drafts with it, and closing the form drops
+/// everything.
 ///
 /// Kept here rather than in the menu bar target so the rule can be tested: the
 /// app target has no test harness, and this is the part with a rule in it.
 public struct TitleFilterDrafts: Equatable {
-    /// The source every draft below belongs to.
-    private var owner: SourceHandle?
-    /// Draft text by field key. The keys are the caller's — this type does not
-    /// need to know which fields exist.
-    private var texts: [String: String]
+    /// Draft text by field key, per source. The field keys are the caller's —
+    /// this type does not need to know which fields exist.
+    private var texts: [SourceHandle: [String: String]] = [:]
 
-    public init() {
-        owner = nil
-        texts = [:]
-    }
+    public init() {}
 
-    /// What `field` shows while `source` is selected. Empty for anyone else,
-    /// including when nothing is selected.
+    /// What `field` shows for `source`. Empty for a source that has typed
+    /// nothing, and for no source at all.
     public func text(_ field: String, of source: SourceHandle?) -> String {
-        guard let source, owner == source else { return "" }
-        return texts[field] ?? ""
+        guard let source else { return "" }
+        return texts[source]?[field] ?? ""
     }
 
-    /// Records typing. Text entered for a different source than the one that
-    /// owns the current drafts retires them — the user has moved on.
+    /// Records typing against the source it was typed into. No other source's
+    /// text is reachable from here, whichever callback arrives.
     public mutating func setText(_ text: String, _ field: String, of source: SourceHandle?) {
         guard let source else { return }
-        if owner != source {
-            owner = source
-            texts = [:]
-        }
-        texts[field] = text
+        texts[source, default: [:]][field] = text
     }
 
     /// Records typing for a source that still exists.
     ///
     /// A field built before its source was removed carries a handle nothing
-    /// answers to any more; taking its text would make a dead source the owner
-    /// and hide the live source's draft behind it. Ignored instead.
+    /// answers to any more. Its text is dropped rather than stored against a
+    /// dead source, where it would linger until the form closed.
     public mutating func setText(
         _ text: String, _ field: String, of handle: SourceHandle, in handles: SourceHandles
     ) {
@@ -66,13 +57,18 @@ public struct TitleFilterDrafts: Equatable {
 
     /// Empties one field, after its entry has been added to the list.
     public mutating func clear(_ field: String, of source: SourceHandle?) {
-        guard let source, owner == source else { return }
-        texts[field] = ""
+        guard let source else { return }
+        texts[source]?[field] = ""
     }
 
-    /// Drops everything — the form is closing, or a fresh one is opening.
+    /// Drops a removed source's drafts. They die with the source rather than
+    /// waiting for the next selection change to sweep them up.
+    public mutating func remove(_ source: SourceHandle) {
+        texts[source] = nil
+    }
+
+    /// Drops everything — the selection moved, or the form is closing.
     public mutating func removeAll() {
-        owner = nil
         texts = [:]
     }
 }

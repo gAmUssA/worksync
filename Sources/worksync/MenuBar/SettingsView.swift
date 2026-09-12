@@ -206,14 +206,16 @@ struct SettingsView: View {
                     // Bound to the draft, never straight to the config: routing
                     // keystrokes at the rename policy made the first differing
                     // character open the orphan warning, and the field could
-                    // not accumulate a new name at all (SPEC §11.1).
+                    // not accumulate a new name at all (SPEC §11.1). Addressed
+                    // by this card's handle like every other control here, so a
+                    // setter retained from another source cannot rename this one.
                     TextField("id", text: Binding(
-                        get: { model.sourceIDDraft?.text ?? source.id },
-                        set: { model.sourceIDDraft?.text = $0 }
+                        get: { model.sourceName(of: handle) },
+                        set: { model.setSourceName($0, of: handle) }
                     ))
                     .textFieldStyle(.roundedBorder)
                     .focused($idFieldFocused)
-                    .onSubmit { model.commitSourceIDDraft() }
+                    .onSubmit { model.commitSourceName(of: handle) }
                 }
                 .font(.callout)
 
