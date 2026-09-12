@@ -41,8 +41,12 @@ struct SettingsView: View {
         .onChange(of: idFieldFocused) { wasFocused, isFocused in
             // Only on the way out. Committing on focus gain would judge the
             // text the moment the user clicked into the field.
+            //
+            // The outcome is deliberately unused: leaving the field starts
+            // nothing that a refusal would have to stop, and the reason is
+            // rendered under the field either way.
             if wasFocused, !isFocused {
-                model.commitSourceIDDraft()
+                _ = model.commitSourceIDDraft()
             }
         }
         .onChange(of: model.selectedSource) { _, newValue in
@@ -161,7 +165,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var sourcesSection: some View {
-        if let config = model.editingConfig {
+        if model.editingConfig != nil {
             card("Sources") {
                 Text("The first source listed wins when the same event appears in two of them.")
                     .font(.caption)

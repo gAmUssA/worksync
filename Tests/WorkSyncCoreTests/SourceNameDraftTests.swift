@@ -95,6 +95,20 @@ final class SourceNameDraftTests: XCTestCase {
         XCTAssertEqual(field.text(of: personal, fallback: "home"), "home")
     }
 
+    // MARK: What a commit reports
+
+    /// The outcomes a caller has to stop for. `renameError` could not say this:
+    /// a caller that does not read it carries on regardless.
+    func testARefusalAndAnOpenConfirmationBlockTheAction() {
+        XCTAssertTrue(SourceNameCommit.rejected(reason: "…").blocksAction)
+        XCTAssertTrue(SourceNameCommit.awaitingConfirmation.blocksAction)
+    }
+
+    func testSettledAndRenamedDoNotBlockTheAction() {
+        XCTAssertFalse(SourceNameCommit.settled.blocksAction)
+        XCTAssertFalse(SourceNameCommit.renamed("home").blocksAction)
+    }
+
     func testRemoveAllEmptiesTheField() {
         var field = SourceNameDraft()
         field.seed(personal, id: "personal")

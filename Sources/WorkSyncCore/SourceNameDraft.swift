@@ -71,3 +71,33 @@ public struct SourceNameDraft: Equatable {
         draft = nil
     }
 }
+
+/// What happened when the name field was committed.
+///
+/// Returned rather than signalled by setting `renameError` and hoping the caller
+/// looks: a commit that refuses the typed name has to stop whatever was about to
+/// happen, and a caller cannot stop for a side effect it never reads. Adding a
+/// source used to commit, ignore the refusal, and carry on; switching rows used
+/// to commit, ignore the refusal, and then clear both the typed name and the
+/// error on its way past.
+public enum SourceNameCommit: Equatable {
+    /// Nothing was being edited, or the text resolved to the id it already had.
+    case settled
+    /// Applied — the source now answers to `id`.
+    case renamed(String)
+    /// The rename orphans events, so the user has to confirm it first.
+    case awaitingConfirmation
+    /// Refused. The typed text is still in the field and `reason` is under it.
+    case rejected(reason: String)
+
+    /// Whether the action that triggered this commit must stop.
+    ///
+    /// A refusal has to stop it, and so does an open confirmation: the alert
+    /// names one source, and whatever comes next would happen behind it.
+    public var blocksAction: Bool {
+        switch self {
+        case .settled, .renamed: false
+        case .awaitingConfirmation, .rejected: true
+        }
+    }
+}

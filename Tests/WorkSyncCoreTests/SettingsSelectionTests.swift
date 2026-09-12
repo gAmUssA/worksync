@@ -21,6 +21,9 @@ private struct Editor {
     var drafts = TitleFilterDrafts()
     var rowIDs = TitleFilterRowIDs()
     var nameField = SourceNameDraft()
+    var renameError: String?
+    /// Ids already on disk, so a rename of a saved source needs confirming.
+    var savedSourceIDs: Set<String> = []
 
     /// `MenuBarModel.openSettings`
     init(_ config: Config) {
@@ -54,7 +57,13 @@ private struct Editor {
 
     /// `MenuBarModel.select(_:)` — the selection funnel, which retires the
     /// per-source drafts unless the move is a rename.
-    mutating func select(_ handle: SourceHandle?, keepingDrafts: Bool = false) {
+    /// `MenuBarModel.select`, which now stops on a refusal rather than moving
+    /// past it.
+    mutating func select(_ handle: SourceHandle?, keepingDrafts: Bool = false, committing: Bool = false) {
+        if committing, nameField.isDirty, commit().blocksAction {
+            selected = nameField.pending?.handle
+            return
+        }
         selected = handle
         nameField.seed(handle, id: handles.resolve(handle)?.id)
         if !keepingDrafts {
@@ -91,15 +100,45 @@ private struct Editor {
         nameField.setText(text, of: handle)
     }
 
-    /// `MenuBarModel.commitSourceName` + the `.apply` arm of
-    /// `commitSourceIDDraft`. Unsaved sources rename without a warning.
-    mutating func commitName(of handle: SourceHandle) {
-        guard let draft = nameField.draft(of: handle),
-              let source = handles.resolve(handle) else { return }
+    /// `MenuBarModel.commitSourceIDDraft` — the whole of it, including what it
+    /// now reports back.
+    mutating func commit() -> SourceNameCommit {
+        guard let pending = nameField.pending,
+              let source = handles.resolve(pending.handle) else { return .settled }
         let others = config.sources.map(\.id).filter { $0 != source.id }
-        if case let .apply(newID) = draft.commit(savedSourceIDs: [], otherSourceIDs: others) {
-            rename(handle, to: newID)
+
+        switch pending.draft.commit(savedSourceIDs: savedSourceIDs, otherSourceIDs: others) {
+        case .unchanged:
+            renameError = nil
+            nameField.revert()
+            return .settled
+        case let .rejected(reason):
+            renameError = reason
+            return .rejected(reason: reason)
+        case let .apply(newID):
+            renameError = nil
+            rename(pending.handle, to: newID)
+            return .renamed(newID)
+        case .confirm:
+            renameError = nil
+            return .awaitingConfirmation
         }
+    }
+
+    /// `MenuBarModel.commitSourceName` — the field's own submit.
+    mutating func commitName(of handle: SourceHandle) {
+        guard nameField.draft(of: handle) != nil else { return }
+        _ = commit()
+    }
+
+    /// `MenuBarModel.addSource`, which now stops on a refusal.
+    mutating func addSource() {
+        if nameField.isDirty, commit().blocksAction {
+            return
+        }
+        let added = SourceConfig(id: "source-2", account: "iCloud", calendar: "C")
+        config.sources.append(added)
+        select(handles.mint(added.id))
     }
 
     /// `MenuBarModel.titleFilterDraft` / `setTitleFilterDraft`
@@ -302,6 +341,84 @@ final class SettingsSelectionTests: XCTestCase {
         editor.type("late A draft", into: personal)
 
         XCTAssertEqual(editor.draft(of: travel), "B current draft")
+    }
+
+    // MARK: A refused name stops what it was asked to do
+
+    /// `+` used to commit, ignore the refusal, and add anyway — clearing the
+    /// error on the way. `saveSettings` already stopped; now they agree.
+    func testAddingASourceIsBlockedWhileTheNameIsInvalid() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+
+        editor.type(name: "team/personal", into: personal) // "/" corrupts markers
+        editor.addSource()
+
+        XCTAssertEqual(editor.config.sources.count, 2, "no source may be added")
+        XCTAssertNotNil(editor.renameError, "and the reason must still be on screen")
+        XCTAssertEqual(editor.name(of: personal), "team/personal", "with the typed name still in the field")
+    }
+
+    func testAddingASourceProceedsOnceTheNameIsValid() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+
+        editor.type(name: "home", into: personal)
+        editor.addSource()
+
+        XCTAssertEqual(editor.config.sources.count, 3)
+        XCTAssertEqual(editor.source(for: personal)?.id, "home", "the rename landed first")
+        XCTAssertNil(editor.renameError)
+    }
+
+    /// The comment promising the draft is not lost used to be false: switching
+    /// rows discarded the typed name AND the error. Now the move does not
+    /// happen until the name can be applied.
+    func testSelectingAnotherSourceIsBlockedWhileTheNameIsInvalid() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
+
+        editor.type(name: "team/personal", into: personal)
+        editor.select(travel, committing: true)
+
+        XCTAssertEqual(editor.selected, personal, "the selection stays on the source with the problem")
+        XCTAssertEqual(editor.name(of: personal), "team/personal", "the typed name survives")
+        XCTAssertNotNil(editor.renameError, "and so does the reason")
+    }
+
+    func testSelectingAnotherSourceProceedsOnceTheNameIsValid() throws {
+        var editor = try editor()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
+
+        editor.type(name: "home", into: personal)
+        editor.select(travel, committing: true)
+
+        XCTAssertEqual(editor.selected, travel)
+        XCTAssertEqual(editor.source(for: personal)?.id, "home", "the rename landed on the way out")
+        XCTAssertNil(editor.renameError)
+    }
+
+    /// A rename that orphans events opens a confirmation. Whatever asked for the
+    /// commit stops too — the alert names one source, and anything that followed
+    /// would happen behind it.
+    func testAnOpenConfirmationAlsoStopsTheAction() throws {
+        var editor = try editor()
+        editor.savedSourceIDs = ["personal", "travel"]
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
+
+        editor.type(name: "home", into: personal)
+        XCTAssertEqual(editor.commit(), .awaitingConfirmation)
+
+        editor.type(name: "home", into: personal)
+        editor.select(travel, committing: true)
+        XCTAssertEqual(editor.selected, personal, "the selection waits for the answer")
+
+        editor.type(name: "home", into: personal)
+        editor.addSource()
+        XCTAssertEqual(editor.config.sources.count, 2, "and so does the add")
     }
 
     // MARK: A removed source
