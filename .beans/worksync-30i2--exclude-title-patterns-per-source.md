@@ -1,10 +1,10 @@
 ---
 # worksync-30i2
 title: exclude_title_patterns (per source)
-status: draft
+status: completed
 type: feature
 created_at: 2026-08-14T03:10:50Z
-updated_at: 2026-08-14T03:10:50Z
+updated_at: 2026-09-12T03:37:22Z
 ---
 
 Exclude events from mirroring by matching their title — e.g. keep "Vacation" or "OOO" out of the work calendar entirely.
@@ -26,3 +26,29 @@ Recommend 1 for v1. Silently dropping busy time is the dangerous failure directi
 
 ## Related
 Complements min/max_duration_minutes and skip_weekdays, which landed in the same filter pass.
+
+## Shipped
+
+Implemented in PR #1 (`feat/source-title-filter`) with the recommended
+semantics: option 1, case-insensitive substring, filtered in the step-3
+eligibility pass.
+
+Two divergences from this sketch, both deliberate:
+
+- The key is `title_excludes`, not `exclude_title_patterns` — shorter, and it
+  pairs with its opposite.
+- A second key `title_matches` ships alongside it: an allow-list, for the case
+  that motivated the work (mirror only the "Personal Commitment" holds another
+  sync tool writes onto a work calendar, not that calendar's real meetings).
+  `title_excludes` is applied second, so an event hitting both lists is dropped.
+
+Matching is also diacritic-insensitive, which this sketch did not specify.
+A blank entry is rejected as a config error rather than accepted as a no-op,
+since `""` matches every title and would silently disable the filter.
+
+SPEC §4.1 now states the privacy reasoning this bean asked for.
+
+## Closed — 2026-09-12
+
+Shipped in v0.3.0 (PR #1) as `title_matches` / `title_excludes`, and given a
+Settings UI in v0.4.0 (PR #7).
