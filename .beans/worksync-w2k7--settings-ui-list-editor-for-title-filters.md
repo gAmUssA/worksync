@@ -11,7 +11,8 @@ updated_at: 2026-09-11T23:05:00Z
 `SettingsView.sourceDetail` has no controls for either, so the settings screen
 silently omits two source options.
 
-Every other per-source field is a row: a text field, a toggle, a stepper. These
+Every other per-source field the form currently exposes is a row: a text field,
+a toggle, a stepper. (Four fields have no control at all — see worksync-t4qp.) These
 two are list-valued, which is why they were left out rather than bolted on — a
 comma-joined text field would be the wrong answer, since a title can contain a
 comma.
