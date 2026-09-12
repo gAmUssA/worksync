@@ -71,9 +71,12 @@ struct SettingsView: View {
             if let rename = model.pendingRename {
                 Text(
                     "Every blocker WorkSync created carries the source id, which is how it "
-                        + "recognizes its own events. Renaming “\(rename.from)” to “\(rename.to)” orphans all of "
-                        + "them: they will never be updated or removed by a normal sync.\n\n"
-                        + "Recover them afterwards with:\nworksync purge --source \(rename.from)"
+                        + "recognizes its own events. After renaming “\(rename.from)” to “\(rename.to)”, the "
+                        + "next sync no longer recognizes the old ones. It deletes the ones it can see — "
+                        + "inside the sync window, on a calendar this source still writes to — and creates "
+                        + "them again under the new name.\n\n"
+                        + "Any beyond that window, or on a calendar this source no longer targets, are left "
+                        + "behind. Reach those with:\nworksync purge --source \(rename.from)"
                 )
             }
         }

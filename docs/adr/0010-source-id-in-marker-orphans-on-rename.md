@@ -47,8 +47,10 @@ all enumerated calendars within 365 days on either side of now
   not remove it; a later pass can delete it if it is fetched and still unmatched.
 - Purge reaches calendars outside the current target set, but its bounded scan
   and possible read/write failures do not guarantee removal of every leftover.
-  `worksync status` labels discovered source ids absent from config as ORPHANED;
-  that label does not mean they are immune to a later normal sync.
+  `worksync status` flags discovered source ids absent from config, and says
+  what it means: a sync removes the ones inside its window, purge reaches the
+  rest. It previously labelled them ORPHANED, which read as immune to a later
+  normal sync.
 - Replacing the embedded name with a persistent source identity would require a
   marker compatibility/migration decision. This implementation still uses the
   config string id. Editing-session handles (ADR-0005) do not change markers

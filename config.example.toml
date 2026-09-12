@@ -72,9 +72,12 @@ calendar = "Calendar"
 # A short, stable slug. It is embedded verbatim in every event WorkSync creates,
 # which is how it recognizes its own events later.
 #
-# RENAMING THIS ORPHANS EVERY EVENT ALREADY CREATED UNDER THE OLD NAME: they
-# will never be updated and never cleaned up by a normal sync. The only way to
-# reach them afterwards is `worksync purge --source <old-id>`. Choose it once.
+# RENAMING THIS STRANDS EVENTS CREATED UNDER THE OLD NAME. The next sync no
+# longer recognizes them: it deletes the ones it fetches — inside the sync
+# window, on a calendar this source still writes to — and creates them again
+# under the new name. Any beyond that window, or on a calendar this source no
+# longer targets, are left behind; `worksync purge --source <old-id>` is how you
+# reach those. Choose it once.
 #
 # Cannot contain "/" or line breaks — both would corrupt the marker.
 id = "personal"

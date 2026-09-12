@@ -50,13 +50,16 @@ struct Status: ParsableCommand {
             print("No managed events found.")
         } else {
             for sourceID in counts.keys.sorted() {
-                // An id present on the calendars but absent from config means
-                // orphaned events — the id was renamed or the source removed,
-                // and only `purge --source` can reach them (SPEC §4.1).
-                let orphaned = configured.contains(sourceID)
+                // An id present on the calendars but absent from config: the id
+                // was renamed or the source removed, so nothing recreates these.
+                // A normal sync still deletes the ones it fetches — its window,
+                // on a currently targeted calendar — and purge reaches the rest
+                // (SPEC §4.1).
+                let stranded = configured.contains(sourceID)
                     ? ""
-                    : "  (ORPHANED — not in config; recover with `worksync purge --source \(sourceID)`)"
-                print("\(sourceID): \(counts[sourceID]!) event(s)\(orphaned)")
+                    : "  (not in config — a sync removes those in its window; "
+                    + "`worksync purge --source \(sourceID)` reaches the rest)"
+                print("\(sourceID): \(counts[sourceID]!) event(s)\(stranded)")
             }
         }
         for sourceID in configured.sorted() where counts[sourceID] == nil {
