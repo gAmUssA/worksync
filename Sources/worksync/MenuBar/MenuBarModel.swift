@@ -669,6 +669,22 @@ extension MenuBarModel {
         titleFilterDrafts[field] = ""
     }
 
+    /// Trims every entry, the way the add field already does.
+    ///
+    /// Run at the save commit point rather than per keystroke, so a space typed
+    /// mid-word is not eaten while the user is still typing.
+    func normalizeTitleFilters() {
+        guard var config = editingConfig else { return }
+        for index in config.sources.indices {
+            for field in TitleFilterField.allCases {
+                config.sources[index][keyPath: field.keyPath] = TitleFilterEntry.normalized(
+                    config.sources[index][keyPath: field.keyPath]
+                )
+            }
+        }
+        editingConfig = config
+    }
+
     func removeTitleFilter(_ field: TitleFilterField, fromSourceAt index: Int, at row: Int) {
         guard var entries = editingConfig?.sources[index][keyPath: field.keyPath],
               entries.indices.contains(row) else { return }
@@ -722,6 +738,10 @@ extension MenuBarModel {
                 addTitleFilter(field, toSourceAt: index)
             }
         }
+        // A row edited in place never went through `adding`, so this is where
+        // its padding comes off. Before the problem check, since trimming can
+        // turn "   " into an empty row that must refuse the save.
+        normalizeTitleFilters()
         // Never reachable through the form, which disables Save on a problem —
         // but the writer's validation would name a config field rather than the
         // row that caused it, so the readable message is produced here.
@@ -787,10 +807,15 @@ enum TitleFilterField: String, CaseIterable, Hashable {
         }
     }
 
-    var placeholder: String {
+    /// The add field's prompt.
+    ///
+    /// Never a plausible entry: `"1:1"` as placeholder text sat directly under
+    /// a real `1:1` row and read as a second one. The two fields also differ
+    /// from each other, so a screenshot of the pair is unambiguous.
+    var addPlaceholder: String {
         switch self {
-        case .matches: "1:1"
-        case .excludes: "tentative"
+        case .matches: "Add a word or phrase…"
+        case .excludes: "Add a word to exclude…"
         }
     }
 }

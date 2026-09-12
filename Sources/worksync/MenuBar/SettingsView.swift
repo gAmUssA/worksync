@@ -316,7 +316,7 @@ struct SettingsView: View {
             ForEach(entries.indices, id: \.self) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        TextField(field.placeholder, text: Binding(
+                        TextField("", text: Binding(
                             get: { row < entries.count ? entries[row] : "" },
                             set: { model.editingConfig?.sources[index][keyPath: field.keyPath][row] = $0 }
                         ))
@@ -341,7 +341,7 @@ struct SettingsView: View {
             }
 
             HStack(spacing: 6) {
-                TextField(field.placeholder, text: Binding(
+                TextField(field.addPlaceholder, text: Binding(
                     get: { model.titleFilterDraft(field) },
                     set: { model.setTitleFilterDraft(field, to: $0) }
                 ))

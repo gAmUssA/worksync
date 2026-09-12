@@ -107,6 +107,63 @@ final class TitleFilterEntryTests: XCTestCase {
         XCTAssertNoThrow(try ConfigLoader.validate(config))
     }
 
+    // MARK: Trimming a row edited in place
+
+    func testNormalizedTrimsEveryEntry() {
+        // The add field trims. A row edited in place goes through this instead,
+        // so the two paths cannot diverge.
+        XCTAssertEqual(TitleFilterEntry.normalized([" lunch ", "gym\t"]), ["lunch", "gym"])
+    }
+
+    func testNormalizedLeavesAnAlreadyCleanListAlone() {
+        XCTAssertEqual(TitleFilterEntry.normalized(["lunch", "gym"]), ["lunch", "gym"])
+        XCTAssertEqual(TitleFilterEntry.normalized([]), [])
+    }
+
+    func testARowTrimmedToNothingStaysAsAnEmptyRowAndBlocksTheSave() {
+        // Dropping it here would be the silent edit the form exists to avoid;
+        // leaving it visible is what makes `problem` refuse the save.
+        let normalized = TitleFilterEntry.normalized(["lunch", "   "])
+        XCTAssertEqual(normalized, ["lunch", ""])
+        XCTAssertEqual(TitleFilterEntry.problem(in: normalized), TitleFilterEntry.message(for: .blank))
+    }
+
+    /// The failure this prevents is invisible: `" lunch "` passes
+    /// `ConfigLoader.validate`, and then the planner's substring search misses
+    /// "Lunch with Bob" because of the leading space. A `title_matches` source
+    /// quietly stops producing blockers and nothing says why.
+    func testAPaddedEntryWouldStopMatchingIfItReachedDisk() {
+        var source = SourceConfig(id: "personal", account: "iCloud", calendar: "Personal")
+        source.titleMatches = [" lunch "]
+        XCTAssertFalse(SyncPlanner.matchesTitleFilters("Lunch with Bob", source: source))
+
+        source.titleMatches = TitleFilterEntry.normalized(source.titleMatches)
+        XCTAssertTrue(SyncPlanner.matchesTitleFilters("Lunch with Bob", source: source))
+    }
+
+    func testARowEditedToPaddedTextReloadsTrimmed() throws {
+        let directory = NSTemporaryDirectory() + "worksync-filters-\(UUID().uuidString)"
+        let path = directory + "/config.toml"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try Self.fixture.write(toFile: path, atomically: true, encoding: .utf8)
+
+        // What the form holds after the user edits an existing row to " lunch "
+        // and presses Save: the raw text, trimmed at the commit point.
+        var config = try ConfigLoader.parse(Self.fixture)
+        config.sources[0].titleMatches = [" lunch "]
+        config.sources[0].titleExcludes = ["\ttentative\t"]
+        for index in config.sources.indices {
+            config.sources[index].titleMatches = TitleFilterEntry.normalized(config.sources[index].titleMatches)
+            config.sources[index].titleExcludes = TitleFilterEntry.normalized(config.sources[index].titleExcludes)
+        }
+
+        XCTAssertEqual(try ConfigWriter.save(config, to: path), .preserved)
+        let reloaded = try ConfigLoader.load(path: path)
+        XCTAssertEqual(reloaded.sources[0].titleMatches, ["lunch"])
+        XCTAssertEqual(reloaded.sources[0].titleExcludes, ["tentative"])
+    }
+
     // MARK: Round trip through the writer
 
     /// The fixture is hand-wrapped on purpose: a list a user edits in the form

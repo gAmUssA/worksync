@@ -70,6 +70,23 @@ public enum TitleFilterEntry {
         return entries + [candidate]
     }
 
+    /// Every entry as it should be stored.
+    ///
+    /// The add field trims, so a row edited in place has to as well. A saved
+    /// `" lunch "` passes `ConfigLoader.validate` and then never matches
+    /// anything — the planner substring-searches for the padded text, so
+    /// "Lunch with Bob" misses and a `title_matches` source quietly stops
+    /// producing blockers. Nothing on screen distinguishes that from a filter
+    /// that is simply not hitting today.
+    ///
+    /// A row that trims to nothing stays in the list as an empty one rather
+    /// than disappearing: `problem(in:)` then refuses the save, which is the
+    /// visible outcome. Dropping it here would be the silent edit this exists
+    /// to prevent.
+    public static func normalized(_ entries: [String]) -> [String] {
+        entries.map(normalize)
+    }
+
     /// The first reason `entries` could not be saved, or nil when it is fine.
     ///
     /// The form's last line of defence: a row edited to blank in place never
