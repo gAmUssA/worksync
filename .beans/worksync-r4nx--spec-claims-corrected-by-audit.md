@@ -18,9 +18,12 @@ one, so they should be corrected or explicitly marked historical.
 
 Documentation-only, from the audit:
 
-- §4.1 / §7 — renaming a source does NOT strand events beyond reach: unmatched
-  current-version markers inside the fetched window are deleted by normal
-  reconciliation. Purge is not "the only way". §6 is closer to the code.
+- §4.1 / §7 — renaming a source does not strand every orphaned blocker:
+  unmatched current-version markers **inside the fetched window, on a calendar
+  still being reconciled** are deleted by a normal pass, so purge is not "the
+  only way". Blockers outside that window, or on a calendar the config no
+  longer targets, are never fetched and do still need purge. §6 is closer to
+  the code.
 - §6 — a changed `target_calendar` is not retargeted in place when the old
   target leaves the fetched set; the old event is simply never seen.
 - §4.3 step 6 — full serialization has a **third** trigger: an existing file

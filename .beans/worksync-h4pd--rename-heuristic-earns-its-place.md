@@ -33,16 +33,25 @@ inference is what produces the wrong-comment case above.
 
 - **A partial origins map silently loses comments.** The "include unchanged
   sources too, absence means new" contract is documented on `save` but nothing
-  enforces it. Cheap guard: when `sourceOrigins` is non-nil, assert in debug
-  builds that every `new` id is either a key in the map or absent from
-  `previousByID`. Catches "I only listed the renames" without changing shipping
-  behaviour.
+  enforces it, so a caller that lists only the renames loses the untouched
+  sources' comments with no signal.
+
+  The obvious guard does not work: asserting that every `new` id is either a
+  key in the map or absent from `previousByID` fires on a case the writer
+  supports on purpose — a new source reusing a removed source's id, which
+  `ConfigWriterTests.testNewSourceReusingRemovedIDDoesNotInheritOldBlock`
+  covers. Absence from the map is exactly how "this is new" is expressed, so
+  absence cannot also mean "the caller forgot". A real guard needs a signal
+  the caller cannot omit — passing the previous source id list alongside the
+  map, so completeness is checkable — or the map becomes mandatory and the
+  heuristic goes away.
 - `sourceOrigins` has no test at the model layer — only through `ConfigWriter`.
 - `testMatchingOtherSourcesFieldsDoesNotMoveComments` is a control, not a
   defect-catching test; worth labelling as such so nobody reads it as coverage.
 
 [ ] Decide: keep the heuristic, or make `sourceOrigins` mandatory
-[ ] Either way, add the debug-only partial-map guard
+[ ] Decide whether completeness is checkable at all (see above), or
+      drop the guard idea
 [ ] Add model-layer coverage for origins tracking
 
 ## Related

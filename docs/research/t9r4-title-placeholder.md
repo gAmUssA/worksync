@@ -1,7 +1,7 @@
 # t9r4 — `{title}` on the blocker: ship or decline?
 
 Bean: `.beans/worksync-t9r4--title-placeholder-for-the-blocker-template.md`
-Repo: `/Users/vikgamov/projects/ai/worksync` (read-only)
+Repo: this repository (read-only during the research pass)
 
 ## Recommendation
 

@@ -13,8 +13,10 @@ SPEC §11 says config edits apply "on the next sync without a restart", and that
 the timer fires every current `interval_minutes`.
 
 `StatusItemController.startScheduler` reads `model.intervalMinutes` **once**
-into a repeating Timer, and nothing recreates it on save. `MenuBarModel` builds
-its `Logger` once with the initial `log_level`.
+into a repeating Timer, and nothing recreates it on save.
+`LiveMenuBarServices.liveServices` builds the live `Logger` once from the
+initial `log_level` (`Sources/worksync/MenuBar/LiveMenuBarServices.swift:90`)
+and nothing rebuilds it on save either.
 
 Sync *planning* does reload config, so filters, padding, calendars and the rest
 do apply on the next pass — the SPEC claim is true for those. It is false for

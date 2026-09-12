@@ -20,8 +20,9 @@ doctor check state the Health section already computes.
 That single decision is the milestone. A completion flag cannot reappear when
 calendar access is revoked six months later, so it forces a second code path
 that answers "is this set up?" differently from doctor — two truths, drifting.
-Deriving from check state means revocation re-enters setup for free, which
-SPEC §15 already demands of the icon.
+Deriving from check state means revocation re-enters setup for free — the same
+state-driven treatment SPEC §§11/16 already demand of the icon, which answers
+"is WorkSync OK?" from live doctor findings rather than a stored flag.
 
 Researched against six menu bar apps verified from current source (Rectangle,
 Ice, Stats, MonitorControl, Maccy, Hidden Bar). The repeating pattern is a

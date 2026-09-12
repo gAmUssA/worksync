@@ -1,6 +1,6 @@
 ---
 # worksync-v8xr
-title: 'Settings: a pending rename confirms against a stale index'
+title: 'Settings: a pending rename is not revalidated at confirm time'
 status: todo
 type: bug
 created_at: 2026-09-12T01:31:24Z
@@ -13,20 +13,24 @@ than bundled into the settings-UI PR.
 
 ## The defect
 
-`pendingRename` captures the source's **index** when the rename warning is
-raised. Confirmation then acts on that index. Between raising and confirming,
-the user can add, remove or reorder sources.
+As filed: `pendingRename` captured the source's **index** when the rename
+warning was raised, so a concurrent add, remove or reorder could land the
+rename on a **different source**.
 
-The bounds check prevents a trap, so this does not crash. Instead:
+**That half is fixed.** `PendingRename` now holds a `SourceHandle`
+(`MenuBarModel.swift:1153`), and `applyRename` resolves the handle to the id
+the config currently holds, so the rename cannot reach the wrong source however
+the list moves underneath it.
 
-- Confirmation never verifies the live source at that index still has
-  `rename.from`. If the list changed, the rename can land on a **different
-  source**.
-- The destination-collision check is performed when the warning is raised and
-  **not repeated** at confirmation, so a rename can complete into an id another
-  source has taken meanwhile.
+What is still open is the revalidation at confirm time:
 
-Both failure modes are silent: valid config, wrong source renamed.
+- `confirmPendingRename` does not re-check that the source still carries
+  `rename.from`. The handle guarantees the right *source*; it does not
+  guarantee the user is still answering the question that was asked.
+- The destination-collision check runs when the warning is raised and is **not
+  repeated** at confirmation, so a rename can still complete into an id another
+  source has taken meanwhile. This one is silent: valid config, two sources
+  racing for a name.
 
 ## The deeper point the reviewer made
 
@@ -43,12 +47,14 @@ stays ordinary editable data.
 That is a refactor of the settings editor's identity model, not a patch, which is
 why it wants its own change.
 
-[ ] Retain the source's identity (not index) in `PendingRename`
-[ ] Resolve again at confirmation; verify the live source still has `from`
+[x] Retain the source's identity (not index) in `PendingRename` — shipped as
+      `SourceHandle`; see ADR-0005
+[ ] Verify at confirmation that the live source still carries `from`
 [ ] Repeat the destination-collision check against current sources at confirm
-[ ] Consider the stable editor-session token for sources generally
-[ ] Tests: rename-in-flight with a concurrent add/remove/reorder; delete and
-      recreate under the same id; confirm-into-taken-id
+[x] Consider the stable editor-session token for sources generally — that is
+      what `SourceHandle` became
+[ ] Tests: confirm-into-taken-id; confirm after the source's id changed by
+      another path
 
 ## Related
 - PR #7 (settings UI) — fixed the same class for the title-filter paths

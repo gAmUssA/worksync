@@ -67,7 +67,7 @@ than amending — the privacy claim is currently unconditional.
 
 ## Research — 2026-09-11
 
-Full findings: `.beans/worksync-t9r4--research.md`
+Full findings: `docs/research/t9r4-title-placeholder.md`
 
 **Recommendation: option 3, decline.** Summary of the argument:
 

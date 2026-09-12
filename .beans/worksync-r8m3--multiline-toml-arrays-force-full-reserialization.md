@@ -1,7 +1,7 @@
 ---
 # worksync-r8m3
 title: Multiline TOML arrays force full reserialization on edit
-status: done
+status: completed
 type: bug
 created_at: 2026-09-11T21:15:16Z
 updated_at: 2026-09-12T03:37:22Z
