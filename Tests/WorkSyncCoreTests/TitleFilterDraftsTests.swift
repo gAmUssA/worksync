@@ -7,90 +7,120 @@ import XCTest
 final class TitleFilterDraftsTests: XCTestCase {
     private let matches = "matches"
     private let excludes = "excludes"
+    /// Sources are addressed by the identity the editing session minted, never
+    /// by their config id — the id is data the user can change.
+    private var handles = SourceHandles()
+
+    private func handle(_ id: String) -> SourceHandle {
+        handles.handle(of: id) ?? handles.mint(id)
+    }
 
     func testTextIsReadableByTheSourceItWasTypedFor() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        XCTAssertEqual(drafts.text(matches, of: "a"), "lunch")
+        drafts.setText("lunch", matches, of: handle("a"))
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "lunch")
     }
 
     /// The defect, stated directly: a half-typed entry must not be visible —
     /// and so must not be committable — while a different source is selected.
     func testTextIsInvisibleToADifferentSource() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        XCTAssertEqual(drafts.text(matches, of: "b"), "", "a draft typed for “a” must not appear under “b”")
+        drafts.setText("lunch", matches, of: handle("a"))
+        XCTAssertEqual(drafts.text(matches, of: handle("b")), "", "a draft typed for “a” must not appear under “b”")
         XCTAssertNil(
-            TitleFilterEntry.adding(drafts.text(matches, of: "b"), to: []),
+            TitleFilterEntry.adding(drafts.text(matches, of: handle("b")), to: []),
             "and an empty draft cannot be added, so it cannot land on the wrong source"
         )
     }
 
     func testTextIsInvisibleWhenNothingIsSelected() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        XCTAssertEqual(drafts.text(matches, of: nil), "")
+        drafts.setText("lunch", matches, of: handle("a"))
+        XCTAssertEqual(drafts.text(matches, of: SourceHandle?.none), "")
     }
 
     func testTypingForAnotherSourceRetiresTheOldDrafts() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        drafts.setText("gym", excludes, of: "b")
-        XCTAssertEqual(drafts.text(excludes, of: "b"), "gym")
-        XCTAssertEqual(drafts.text(matches, of: "b"), "", "“a”'s draft must not survive into “b”'s form")
-        XCTAssertEqual(drafts.text(matches, of: "a"), "", "and it is gone, not merely hidden")
+        drafts.setText("lunch", matches, of: handle("a"))
+        drafts.setText("gym", excludes, of: handle("b"))
+        XCTAssertEqual(drafts.text(excludes, of: handle("b")), "gym")
+        XCTAssertEqual(drafts.text(matches, of: handle("b")), "", "“a”'s draft must not survive into “b”'s form")
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "", "and it is gone, not merely hidden")
     }
 
     func testTheTwoFieldsOfOneSourceAreIndependent() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        drafts.setText("hold", excludes, of: "a")
-        XCTAssertEqual(drafts.text(matches, of: "a"), "lunch")
-        XCTAssertEqual(drafts.text(excludes, of: "a"), "hold")
+        drafts.setText("lunch", matches, of: handle("a"))
+        drafts.setText("hold", excludes, of: handle("a"))
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "lunch")
+        XCTAssertEqual(drafts.text(excludes, of: handle("a")), "hold")
     }
 
     func testClearingOneFieldLeavesTheOther() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        drafts.setText("hold", excludes, of: "a")
-        drafts.clear(matches, of: "a")
-        XCTAssertEqual(drafts.text(matches, of: "a"), "")
-        XCTAssertEqual(drafts.text(excludes, of: "a"), "hold")
+        drafts.setText("lunch", matches, of: handle("a"))
+        drafts.setText("hold", excludes, of: handle("a"))
+        drafts.clear(matches, of: handle("a"))
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "")
+        XCTAssertEqual(drafts.text(excludes, of: handle("a")), "hold")
     }
 
     func testClearingFromAnotherSourceDoesNothing() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        drafts.clear(matches, of: "b")
-        XCTAssertEqual(drafts.text(matches, of: "a"), "lunch")
+        drafts.setText("lunch", matches, of: handle("a"))
+        drafts.clear(matches, of: handle("b"))
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "lunch")
     }
 
-    /// A rename is the same row under a new name, so the typing stays with it —
-    /// the one selection change that must NOT retire the drafts.
+    /// A rename moves the id, not the identity, so the draft needs no carrying
+    /// across: the same handle still reads it.
     func testARenamedSourceKeepsWhatWasTypedForIt() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "personal")
-        drafts.rename("personal", to: "home")
-        XCTAssertEqual(drafts.text(matches, of: "home"), "lunch")
-        XCTAssertEqual(drafts.text(matches, of: "personal"), "")
+        let personal = handle("personal")
+        drafts.setText("lunch", matches, of: personal)
+
+        handles.rename(personal, to: "home")
+        XCTAssertEqual(handles.id(of: personal), "home")
+        XCTAssertEqual(drafts.text(matches, of: personal), "lunch")
     }
 
-    func testRenamingADifferentSourceLeavesTheDraftAlone() {
+    /// The hole a config id left: a field built before the rename commits with
+    /// the id it captured. Addressed by identity there is no such field — it
+    /// carries the handle, which still names the renamed source — and a handle
+    /// nothing answers to any more is ignored.
+    func testALateCommitCannotReOwnADraftUnderARetiredIdentity() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
-        drafts.rename("b", to: "c")
-        XCTAssertEqual(drafts.text(matches, of: "a"), "lunch")
-        XCTAssertEqual(drafts.text(matches, of: "c"), "")
+        let live = handle("personal")
+        drafts.setText("lunch", matches, of: live)
+
+        // A source that was removed while one of its fields was still alive.
+        let retired = handles.mint("ghost")
+        handles.remove(retired)
+        drafts.setText("stale", matches, of: retired, in: handles)
+
+        XCTAssertEqual(drafts.text(matches, of: live), "lunch", "the live source keeps its text")
+        XCTAssertEqual(drafts.text(matches, of: retired), "", "and the dead one owns nothing")
+    }
+
+    func testTypingForALiveSourceStillWorksThroughTheGuardedForm() {
+        var drafts = TitleFilterDrafts()
+        let personal = handle("personal")
+        drafts.setText("lunch", matches, of: personal, in: handles)
+        XCTAssertEqual(drafts.text(matches, of: personal), "lunch")
     }
 
     func testRemoveAllDropsEverything() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("lunch", matches, of: "a")
+        drafts.setText("lunch", matches, of: handle("a"))
         drafts.removeAll()
-        XCTAssertEqual(drafts.text(matches, of: "a"), "")
+        XCTAssertEqual(drafts.text(matches, of: handle("a")), "")
     }
 
     // MARK: Committing a draft to the source it belongs to
+
+    private func resolved(_ id: String) -> EditedSource {
+        EditedSource(handle: handle(id), id: id)
+    }
 
     private func sources() -> [SourceConfig] {
         var personal = SourceConfig(id: "personal", account: "iCloud", calendar: "Personal")
@@ -101,14 +131,14 @@ final class TitleFilterDraftsTests: XCTestCase {
 
     func testCommittingAddsToTheNamedSourceAndClearsThatSourcesDraft() throws {
         var drafts = TitleFilterDrafts()
-        drafts.setText("interview", matches, of: "personal")
+        drafts.setText("interview", matches, of: handle("personal"))
 
         let committed = try XCTUnwrap(TitleFilterEntry.committingDraft(
-            matches, to: \.titleMatches, ofSourceWith: "personal", in: sources(), drafts: drafts
+            matches, to: \.titleMatches, of: resolved("personal"), in: sources(), drafts: drafts
         ))
         XCTAssertEqual(committed.sources[0].titleMatches, ["1:1", "interview"])
         XCTAssertEqual(committed.sources[1].titleMatches, [], "the other source must not gain an entry")
-        XCTAssertEqual(committed.drafts.text(matches, of: "personal"), "", "the draft has landed, so it clears")
+        XCTAssertEqual(committed.drafts.text(matches, of: handle("personal")), "", "the draft has landed, so it clears")
     }
 
     /// The defect: a commit carrying source X used to read and clear the draft
@@ -116,24 +146,24 @@ final class TitleFilterDraftsTests: XCTestCase {
     /// another and then wiped.
     func testCommittingToOneSourceLeavesAnotherSourcesDraftAlone() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("standup", matches, of: "travel")
+        drafts.setText("standup", matches, of: handle("travel"))
 
         let committed = TitleFilterEntry.committingDraft(
-            matches, to: \.titleMatches, ofSourceWith: "personal", in: sources(), drafts: drafts
+            matches, to: \.titleMatches, of: resolved("personal"), in: sources(), drafts: drafts
         )
         XCTAssertNil(committed, "there is nothing typed for “personal”, so the commit does nothing")
         XCTAssertEqual(
-            drafts.text(matches, of: "travel"), "standup",
+            drafts.text(matches, of: handle("travel")), "standup",
             "and the text typed for “travel” is still there to be saved"
         )
     }
 
     func testCommittingForASourceThatIsGoneWritesNothing() {
         var drafts = TitleFilterDrafts()
-        drafts.setText("standup", matches, of: "gone")
+        drafts.setText("standup", matches, of: handle("gone"))
 
         XCTAssertNil(TitleFilterEntry.committingDraft(
-            matches, to: \.titleMatches, ofSourceWith: "gone", in: sources(), drafts: drafts
+            matches, to: \.titleMatches, of: resolved("gone"), in: sources(), drafts: drafts
         ), "a callback for a deleted source must not write to a neighbour")
     }
 
@@ -141,23 +171,23 @@ final class TitleFilterDraftsTests: XCTestCase {
         // Refused, so there is nothing to clear: the user still has what they
         // typed and the reason is on screen.
         var drafts = TitleFilterDrafts()
-        drafts.setText("1:1", matches, of: "personal")
+        drafts.setText("1:1", matches, of: handle("personal"))
 
         XCTAssertNil(TitleFilterEntry.committingDraft(
-            matches, to: \.titleMatches, ofSourceWith: "personal", in: sources(), drafts: drafts
+            matches, to: \.titleMatches, of: resolved("personal"), in: sources(), drafts: drafts
         ))
-        XCTAssertEqual(drafts.text(matches, of: "personal"), "1:1")
+        XCTAssertEqual(drafts.text(matches, of: handle("personal")), "1:1")
     }
 
     func testCommittingOneFieldLeavesTheOtherFieldsDraft() throws {
         var drafts = TitleFilterDrafts()
-        drafts.setText("interview", matches, of: "personal")
-        drafts.setText("hold", excludes, of: "personal")
+        drafts.setText("interview", matches, of: handle("personal"))
+        drafts.setText("hold", excludes, of: handle("personal"))
 
         let committed = try XCTUnwrap(TitleFilterEntry.committingDraft(
-            matches, to: \.titleMatches, ofSourceWith: "personal", in: sources(), drafts: drafts
+            matches, to: \.titleMatches, of: resolved("personal"), in: sources(), drafts: drafts
         ))
-        XCTAssertEqual(committed.drafts.text(excludes, of: "personal"), "hold")
+        XCTAssertEqual(committed.drafts.text(excludes, of: handle("personal")), "hold")
     }
 
     /// The whole scenario, in the order the user performs it: type a filter for
@@ -165,17 +195,17 @@ final class TitleFilterDraftsTests: XCTestCase {
     /// through the view's change handler (adding a source, or removing one).
     func testADraftCannotBeSavedOntoTheSourceASelectionChangeLandsOn() {
         var drafts = TitleFilterDrafts()
-        drafts.setText(" standup", matches, of: "personal")
+        drafts.setText(" standup", matches, of: handle("personal"))
 
         // addSource(): selection moves to the new row.
-        let selectedAfterAdd = "source-2"
+        let selectedAfterAdd = handle("source-2")
         let committed = TitleFilterEntry.adding(
             drafts.text(matches, of: selectedAfterAdd), to: []
         )
         XCTAssertNil(committed, "the new source must not inherit what was typed for “personal”")
 
         // removeSelectedSource(): selection falls back to the first row.
-        let selectedAfterRemove = "travel"
+        let selectedAfterRemove = handle("travel")
         XCTAssertNil(
             TitleFilterEntry.adding(drafts.text(matches, of: selectedAfterRemove), to: []),
             "neither must the row the selection falls back to"

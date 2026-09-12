@@ -45,12 +45,10 @@ struct SettingsView: View {
                 model.commitSourceIDDraft()
             }
         }
-        .onChange(of: model.selectedSourceID) { _, newValue in
+        .onChange(of: model.selectedSource) { _, newValue in
             // Points the draft at the newly selected row, committing any
             // half-typed name first so it is neither lost nor carried across.
-            if model.sourceIDDraft?.committedID != newValue {
-                model.seedSourceIDDraft(for: newValue)
-            }
+            model.seedSourceIDDraft(for: newValue)
         }
         .alert(
             "Rename this source?",
@@ -171,15 +169,17 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 // Drag to reorder, because order decides dedup (SPEC §4.1).
-                List(selection: $model.selectedSourceID) {
-                    ForEach(config.sources, id: \.id) { source in
+                // Selection is an identity, not an id: the id is editable and
+                // a removed one can be taken by a later source.
+                List(selection: $model.selectedSource) {
+                    ForEach(model.sourceRows) { row in
                         HStack {
                             Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
-                            Text(source.id)
+                            Text(row.source.id)
                             Spacer()
-                            Text(source.calendar).font(.caption).foregroundStyle(.secondary)
+                            Text(row.source.calendar).font(.caption).foregroundStyle(.secondary)
                         }
-                        .tag(source.id)
+                        .tag(row.id)
                     }
                     .onMove { model.moveSources(from: $0, to: $1) }
                 }
@@ -191,7 +191,7 @@ struct SettingsView: View {
                     // discoverable macOS interaction (SPEC §11.1).
                     Button { model.addSource() } label: { Image(systemName: "plus") }
                     Button { model.removeSelectedSource() } label: { Image(systemName: "minus") }
-                        .disabled(model.selectedSourceID == nil)
+                        .disabled(model.selectedSource == nil)
                     Spacer()
                 }
             }
@@ -200,10 +200,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var sourceDetail: some View {
-        if let config = model.editingConfig,
-           let selected = model.selectedSourceID,
-           let index = config.sources.firstIndex(where: { $0.id == selected }) {
-            let source = config.sources[index]
+        if let handle = model.selectedSource, let source = model.source(for: handle) {
             card("“\(source.id)” settings") {
                 LabeledContent("Name") {
                     // Bound to the draft, never straight to the config: routing
@@ -230,11 +227,11 @@ struct SettingsView: View {
                 calendarPickers(
                     account: Binding(
                         get: { source.account },
-                        set: { value in model.updateSource(source.id) { $0.account = value } }
+                        set: { value in model.updateSource(handle) { $0.account = value } }
                     ),
                     calendar: Binding(
                         get: { source.calendar },
-                        set: { value in model.updateSource(source.id) { $0.calendar = value } }
+                        set: { value in model.updateSource(handle) { $0.calendar = value } }
                     ),
                     writableOnly: false
                 )
@@ -242,7 +239,7 @@ struct SettingsView: View {
                 LabeledContent("Shown as") {
                     TextField("Busy", text: Binding(
                         get: { source.titleTemplate },
-                        set: { value in model.updateSource(source.id) { $0.titleTemplate = value } }
+                        set: { value in model.updateSource(handle) { $0.titleTemplate = value } }
                     ))
                     .textFieldStyle(.roundedBorder)
                 }
@@ -250,37 +247,37 @@ struct SettingsView: View {
 
                 stepper("Pad before", value: Binding(
                     get: { source.paddingBeforeMinutes },
-                    set: { value in model.updateSource(source.id) { $0.paddingBeforeMinutes = value } }
+                    set: { value in model.updateSource(handle) { $0.paddingBeforeMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 stepper("Pad after", value: Binding(
                     get: { source.paddingAfterMinutes },
-                    set: { value in model.updateSource(source.id) { $0.paddingAfterMinutes = value } }
+                    set: { value in model.updateSource(handle) { $0.paddingAfterMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 stepper("Ignore shorter than", value: Binding(
                     get: { source.minDurationMinutes },
-                    set: { value in model.updateSource(source.id) { $0.minDurationMinutes = value } }
+                    set: { value in model.updateSource(handle) { $0.minDurationMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 Toggle("Merge nearby events", isOn: Binding(
                     get: { source.coalesce },
-                    set: { value in model.updateSource(source.id) { $0.coalesce = value } }
+                    set: { value in model.updateSource(handle) { $0.coalesce = value } }
                 )).font(.callout)
 
                 Toggle("Include all-day events", isOn: Binding(
                     get: { source.includeAllDay },
-                    set: { value in model.updateSource(source.id) { $0.includeAllDay = value } }
+                    set: { value in model.updateSource(handle) { $0.includeAllDay = value } }
                 )).font(.callout)
 
                 Toggle("Skip when work is already busy", isOn: Binding(
                     get: { source.skipIfWorkBusy },
-                    set: { value in model.updateSource(source.id) { $0.skipIfWorkBusy = value } }
+                    set: { value in model.updateSource(handle) { $0.skipIfWorkBusy = value } }
                 )).font(.callout)
 
                 picker("Shows as", selection: Binding(
                     get: { source.availability },
-                    set: { value in model.updateSource(source.id) { $0.availability = value } }
+                    set: { value in model.updateSource(handle) { $0.availability = value } }
                 ), options: Availability.allCases, label: \.rawValue)
 
                 Divider()
@@ -293,8 +290,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                titleFilterEditor(.matches, sourceID: source.id, entries: source.titleMatches)
-                titleFilterEditor(.excludes, sourceID: source.id, entries: source.titleExcludes)
+                titleFilterEditor(.matches, source: handle, entries: source.titleMatches)
+                titleFilterEditor(.excludes, source: handle, entries: source.titleExcludes)
             }
         }
     }
@@ -307,7 +304,7 @@ struct SettingsView: View {
     /// error names a config key at a moment far away from the keystroke.
     private func titleFilterEditor(
         _ field: TitleFilterField,
-        sourceID: String,
+        source handle: SourceHandle,
         entries: [String]
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -317,18 +314,18 @@ struct SettingsView: View {
             // commit can arrive after its row moved, and by position it would
             // land on whatever shifted underneath — silently, since the index
             // is still in range.
-            ForEach(model.titleFilterRows(field, of: sourceID)) { row in
+            ForEach(model.titleFilterRows(field, of: handle)) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         TextField("", text: Binding(
                             get: { row.text },
-                            set: { model.setTitleFilterEntry($0, field, of: sourceID, row: row.id) }
+                            set: { model.setTitleFilterEntry($0, field, of: handle, row: row.id) }
                         ))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Entry in the \(field.accessibilityName)")
 
                         Button {
-                            model.removeTitleFilter(field, from: sourceID, row: row.id)
+                            model.removeTitleFilter(field, from: handle, row: row.id)
                         } label: {
                             Image(systemName: "minus")
                         }
@@ -338,7 +335,7 @@ struct SettingsView: View {
                     // should see why Save went away. `checkRow`, not `check`:
                     // an emptied row is an error, where an empty add field is
                     // just an add field nobody has typed into yet.
-                    if let message = model.titleFilterRowMessage(field, of: sourceID, row: row.id) {
+                    if let message = model.titleFilterRowMessage(field, of: handle, row: row.id) {
                         Text(message).font(.caption).foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -347,23 +344,23 @@ struct SettingsView: View {
 
             HStack(spacing: 6) {
                 TextField(field.addPlaceholder, text: Binding(
-                    get: { model.titleFilterDraft(field, of: sourceID) },
-                    set: { model.setTitleFilterDraft(field, to: $0, of: sourceID) }
+                    get: { model.titleFilterDraft(field, of: handle) },
+                    set: { model.setTitleFilterDraft(field, to: $0, of: handle) }
                 ))
                 .textFieldStyle(.roundedBorder)
-                .onSubmit { model.addTitleFilter(field, to: sourceID) }
+                .onSubmit { model.addTitleFilter(field, to: handle) }
 
                 Button {
-                    model.addTitleFilter(field, to: sourceID)
+                    model.addTitleFilter(field, to: handle)
                 } label: {
                     Image(systemName: "plus")
                 }
-                .disabled(!isAddable(model.titleFilterDraftCheck(field, of: sourceID)))
+                .disabled(!isAddable(model.titleFilterDraftCheck(field, of: handle)))
                 .accessibilityLabel("Add to the \(field.accessibilityName)")
             }
 
             if let message = TitleFilterEntry.message(
-                for: model.titleFilterDraftCheck(field, of: sourceID)
+                for: model.titleFilterDraftCheck(field, of: handle)
             ) {
                 Text(message).font(.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)

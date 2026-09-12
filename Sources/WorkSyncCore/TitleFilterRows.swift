@@ -45,10 +45,10 @@ public enum TitleFilterRowID: Hashable {
 public struct TitleFilterRowIDs: Equatable {
     /// Which list a row belongs to: one source, one field.
     public struct List: Hashable {
-        public let source: String
+        public let source: SourceHandle
         public let field: String
 
-        public init(source: String, field: String) {
+        public init(source: SourceHandle, field: String) {
             self.source = source
             self.field = field
         }
@@ -101,17 +101,8 @@ public struct TitleFilterRowIDs: Equatable {
         ids[list] = identities
     }
 
-    /// Follows a source through a rename, so its rows keep the identities the
-    /// live text fields are holding.
-    public mutating func renameSource(_ old: String, to new: String) {
-        for (list, identities) in ids where list.source == old {
-            ids[List(source: new, field: list.field)] = identities
-            ids[list] = nil
-        }
-    }
-
     /// Drops a deleted source's lists.
-    public mutating func removeSource(_ source: String) {
+    public mutating func removeSource(_ source: SourceHandle) {
         for list in ids.keys where list.source == source {
             ids[list] = nil
         }

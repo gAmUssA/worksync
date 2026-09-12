@@ -5,8 +5,10 @@ import XCTest
 /// is silent: a commit that arrives after its row moved used to pass the range
 /// check and rewrite whatever had shifted into that position.
 final class TitleFilterRowsTests: XCTestCase {
-    private let list = TitleFilterRowIDs.List(source: "personal", field: "matches")
-    private let other = TitleFilterRowIDs.List(source: "personal", field: "excludes")
+    private var handles = SourceHandles()
+    private lazy var personal = handles.mint("personal")
+    private lazy var list = TitleFilterRowIDs.List(source: personal, field: "matches")
+    private lazy var other = TitleFilterRowIDs.List(source: personal, field: "excludes")
 
     private func seeded(_ entries: [String]) -> TitleFilterRowIDs {
         var ids = TitleFilterRowIDs()
@@ -119,22 +121,21 @@ final class TitleFilterRowsTests: XCTestCase {
 
     // MARK: Following the source
 
+    /// Rows are keyed by the source's identity, and a rename moves only the id,
+    /// so there is nothing to re-key: the live text fields keep reading the
+    /// same rows.
     func testRenamingASourceKeepsItsRowIdentities() {
         var ids = seeded(["a", "b"])
         let before = ids.rows(list, entries: ["a", "b"]).map(\.id)
-        ids.renameSource("personal", to: "home")
-        let renamed = TitleFilterRowIDs.List(source: "home", field: "matches")
-        XCTAssertEqual(
-            ids.rows(renamed, entries: ["a", "b"]).map(\.id),
-            before,
-            "a live text field is holding these — the rename must not re-key them"
-        )
+        handles.rename(personal, to: "home")
+        XCTAssertEqual(handles.id(of: personal), "home")
+        XCTAssertEqual(ids.rows(list, entries: ["a", "b"]).map(\.id), before)
     }
 
     func testRemovingASourceDropsItsLists() {
         var ids = seeded(["a"])
         ids.seed(other, count: 1)
-        ids.removeSource("personal")
+        ids.removeSource(personal)
         XCTAssertEqual(ids.rows(list, entries: ["a"]).map(\.id), [.position(0)])
         XCTAssertEqual(ids.rows(other, entries: ["a"]).map(\.id), [.position(0)])
     }

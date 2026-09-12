@@ -116,19 +116,21 @@ public enum TitleFilterEntry {
     /// to a different one and then wiped.
     ///
     /// A draft belonging to another source reads as empty here, so a callback
-    /// whose source no longer applies is ignored rather than retargeted.
+    /// whose source no longer applies is ignored rather than retargeted. The
+    /// source arrives as one resolved value, so the list written to and the
+    /// draft cleared cannot be two different sources.
     public static func committingDraft(
         _ field: String,
         to list: WritableKeyPath<SourceConfig, [String]>,
-        ofSourceWith id: String,
+        of source: EditedSource,
         in sources: [SourceConfig],
         drafts: TitleFilterDrafts
     ) -> (sources: [SourceConfig], drafts: TitleFilterDrafts)? {
         guard let updated = adding(
-            drafts.text(field, of: id), to: list, ofSourceWith: id, in: sources
+            drafts.text(field, of: source.handle), to: list, ofSourceWith: source.id, in: sources
         ) else { return nil }
         var cleared = drafts
-        cleared.clear(field, of: id)
+        cleared.clear(field, of: source.handle)
         return (updated, cleared)
     }
 
