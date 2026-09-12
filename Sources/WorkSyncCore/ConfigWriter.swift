@@ -51,12 +51,18 @@ public enum ConfigWriter {
     // MARK: File-level
 
     /// Saves `config`, preserving the existing file's comments and layout.
+    /// `sourceOrigins` maps current IDs to their IDs when editing began. When
+    /// supplied, a missing entry identifies a new source, even if its ID was
+    /// previously used by a removed source. Editors should pass this mapping
+    /// when renaming and changing other fields together.
     ///
     /// Refuses to write anything that does not load back cleanly: a writer that
     /// can hand the next sync pass an unparseable file is worse than one that
     /// refuses to run.
     @discardableResult
-    public static func save(_ config: Config, to path: String) throws -> ConfigWriteOutcome {
+    public static func save(
+        _ config: Config, to path: String, sourceOrigins: [String: String]? = nil
+    ) throws -> ConfigWriteOutcome {
         // Up front, so an invalid config reports what is actually wrong with it
         // ("Invalid source id …") instead of failing the round-trip check
         // further down and blaming the writer for refusing to reload its own
@@ -69,7 +75,7 @@ public enum ConfigWriter {
         let updated: String
         let outcome: ConfigWriteOutcome
         if let original, let previous {
-            let edited = apply(config, previous: previous, to: original)
+            let edited = apply(config, previous: previous, to: original, sourceOrigins: sourceOrigins)
             // The self-check is on the produced text, not on our own diffing
             // logic, so a bug anywhere upstream still cannot corrupt the file.
             updated = try verified(edited, matches: config, fallback: config)
@@ -123,7 +129,10 @@ public enum ConfigWriter {
     // MARK: Line-level edit
 
     /// Applies `config` onto `original`, changing only the lines that need it.
-    public static func apply(_ config: Config, previous: Config, to original: String) -> String {
+    /// See `save` for the optional current-ID to previous-ID mapping.
+    public static func apply(
+        _ config: Config, previous: Config, to original: String, sourceOrigins: [String: String]? = nil
+    ) -> String {
         var document = TomlDocument(text: original)
 
         updateScalars(
@@ -136,7 +145,7 @@ public enum ConfigWriter {
             header: "[target]",
             changes: targetChanges(from: previous.target, to: config.target)
         )
-        updateSources(in: &document, previous: previous.sources, new: config.sources)
+        updateSources(in: &document, previous: previous.sources, new: config.sources, sourceOrigins: sourceOrigins)
 
         return document.text
     }
@@ -172,7 +181,8 @@ public enum ConfigWriter {
     private static func updateSources(
         in document: inout TomlDocument,
         previous: [SourceConfig],
-        new: [SourceConfig]
+        new: [SourceConfig],
+        sourceOrigins: [String: String]?
     ) {
         let blockIndices = document.sections.indices.filter { document.sections[$0].isSourceBlock }
         guard !blockIndices.isEmpty || !new.isEmpty else { return }
@@ -187,10 +197,27 @@ public enum ConfigWriter {
         }
         let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
 
+        let newIDs = Set(new.map(\.id))
         var rebuilt: [TomlDocument.Section] = []
         for source in new {
-            if var existing = blocksByID[source.id] {
-                let before = previousByID[source.id] ?? source
+            let previousID: String?
+            if let sourceOrigins {
+                previousID = sourceOrigins[source.id]
+            } else if previousByID[source.id] != nil {
+                previousID = source.id
+            } else {
+                // Without edit history, infer only a unique ID-only rename.
+                // Array position and calendar names alone are not identity.
+                let matches = previous.filter { candidate in
+                    guard !newIDs.contains(candidate.id) else { return false }
+                    var renamed = candidate
+                    renamed.id = source.id
+                    return renamed == source
+                }
+                previousID = matches.count == 1 ? matches[0].id : source.id
+            }
+            if let previousID, let before = previousByID[previousID],
+               var existing = blocksByID.removeValue(forKey: previousID) {
                 for (key, value) in sourceChanges(from: before, to: source) {
                     TomlDocument.setValue(value, forKey: key, in: &existing)
                 }

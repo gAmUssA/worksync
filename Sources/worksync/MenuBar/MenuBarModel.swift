@@ -54,6 +54,8 @@ final class MenuBarModel {
 
     var screen: PanelScreen = .dashboard
     var editingConfig: Config?
+    /// Current ID -> ID on disk when settings opened. New sources have no entry.
+    private var sourceOrigins: [String: String] = [:]
     var selectedSourceID: String?
     private(set) var availableCalendars: [CalendarRef] = []
     private(set) var settingsBlocked: String?
@@ -452,7 +454,9 @@ extension MenuBarModel {
     /// something quite different from what the user wrote (SPEC §11.1).
     func openSettings() {
         do {
-            editingConfig = try ConfigLoader.load(path: configPath)
+            let config = try ConfigLoader.load(path: configPath)
+            editingConfig = config
+            sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
             configError = nil
         } catch {
             editingConfig = nil
@@ -475,6 +479,7 @@ extension MenuBarModel {
     func closeSettings() {
         screen = .dashboard
         editingConfig = nil
+        sourceOrigins = [:]
         pendingRename = nil
         sourceIDDraft = nil
         renameError = nil
@@ -542,6 +547,7 @@ extension MenuBarModel {
         guard var config = editingConfig, let selected = selectedSourceID else { return }
         guard let index = config.sources.firstIndex(where: { $0.id == selected }) else { return }
         config.sources.remove(at: index)
+        sourceOrigins.removeValue(forKey: selected)
         editingConfig = config
         selectedSourceID = config.sources.first?.id
         // Deliberately not committed first: the draft belongs to the row being
@@ -617,6 +623,10 @@ extension MenuBarModel {
 
     private func applyRename(at index: Int, to newID: String) {
         guard var config = editingConfig, config.sources.indices.contains(index) else { return }
+        let oldID = config.sources[index].id
+        if let originalID = sourceOrigins.removeValue(forKey: oldID) {
+            sourceOrigins[newID] = originalID
+        }
         config.sources[index].id = newID
         editingConfig = config
         selectedSourceID = newID
@@ -640,7 +650,7 @@ extension MenuBarModel {
 
         guard let config = editingConfig else { return }
         do {
-            let outcome = try ConfigWriter.save(config, to: configPath)
+            let outcome = try ConfigWriter.save(config, to: configPath, sourceOrigins: sourceOrigins)
             saveError = nil
             saveWarning = outcome.warning
             savedSourceIDs = Set(config.sources.map(\.id))
