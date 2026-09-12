@@ -255,7 +255,11 @@ jobs:
 
           # Rebuild each attempt from the current tap rather than rebasing
           # competing edits to the same version and sha256 lines.
-          for attempt in 1 2 3; do
+          # Bounded well above the number of releases that could realistically
+          # contend: each rejection costs one fetch and one rebuild, and the
+          # ordering guard makes a stale older tag exit on its first rejection
+          # rather than consume an attempt from anyone else.
+          for attempt in $(seq 1 8); do
             # Check before editing as well as after a rejected push: an older
             # release must never downgrade a newer cask with a fast-forward.
             CURRENT=$(sed -nE 's|^  version "([^"]*)"$|\1|p' "$CASK")
@@ -304,9 +308,12 @@ jobs:
 
             # This checkout is disposable. Keep the downloaded asset's VERSION
             # and SHA in this step and reapply them on the fetched state.
+            # Stagger retries so simultaneous contenders do not collide again
+            # on the same tick.
+            sleep $(( (RANDOM % 5) + attempt ))
             git reset --hard "origin/${BRANCH}"
           done
 
-          echo "::error::Could not push the cask bump for ${VERSION} after 3 attempts. \
+          echo "::error::Could not push the cask bump for ${VERSION} after 8 attempts. \
           Update gAmUssA/homebrew-worksync by hand." >&2
           exit 1
