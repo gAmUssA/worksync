@@ -79,9 +79,9 @@ final class MenuBarEffectsTests: XCTestCase {
 
         XCTAssertEqual(recorder.calendarLookups, 1)
         XCTAssertEqual(model.accountChoices, ["Google", "iCloud"])
-        XCTAssertEqual(model.writableCalendarChoices(inAccount: "Google"), ["Work"])
+        XCTAssertEqual(model.selectableCalendarChoices(inAccount: "Google", writableOnly: true), ["Work"])
         XCTAssertTrue(
-            model.writableCalendarChoices(inAccount: "iCloud").isEmpty,
+            model.selectableCalendarChoices(inAccount: "iCloud", writableOnly: true).isEmpty,
             "a read-only calendar is not somewhere blockers can be written"
         )
     }
