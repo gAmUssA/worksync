@@ -87,9 +87,14 @@ final class MenuBarModel {
     /// typed into rather than on whatever has shifted into its position.
     private var titleFilterRowIDs = TitleFilterRowIDs()
 
+    /// Backing storage so the initializer can set it without the observer
+    /// running before `services` exists.
+    private var isPausedStorage: Bool
     var isPaused: Bool {
-        didSet {
-            UserDefaults.standard.set(isPaused, forKey: Self.pausedKey)
+        get { isPausedStorage }
+        set {
+            isPausedStorage = newValue
+            services.writePaused(newValue)
             refreshState()
         }
     }
@@ -99,15 +104,14 @@ final class MenuBarModel {
     /// no-op this design keeps guarding against.
     private var pendingRequest = false
 
-    private let configPath: String
-    private let logger: Logger
-    private let notifier: Notifier
+    /// Every effect this model has on the world outside itself. The only way
+    /// it reaches a file, a default, the calendar store or the clock.
+    private let services: MenuBarServices
 
     /// Change-driven state. All main-actor confined.
-    private let makeChangeObserver: () -> CalendarChangeObserver
     private var changeObserver: CalendarChangeObserver?
     private var changePolicy: ChangeTriggerPolicy?
-    private var changeTimer: Timer?
+    private var changeTimer: MenuBarScheduledAction?
     /// When a pass last actually wrote something, for echo suppression.
     private var lastWriteAt: Date?
     /// Gates *starting* observation: a successful pass proves calendar access.
@@ -115,28 +119,36 @@ final class MenuBarModel {
 
     static let pausedKey = "io.gamov.worksync.paused"
 
-    /// - Parameter notifier: injectable so a test can drive pass outcomes
-    ///   without posting real banners.
-    /// - Parameters:
-    ///   - notifier: injectable so a test can drive pass outcomes without
-    ///     posting real banners.
-    ///   - makeChangeObserver: injectable so the fast path can be driven in a
-    ///     test without a calendar database.
-    init(
-        configPath: String = ConfigLoader.defaultPath,
-        notifier: Notifier? = nil,
-        makeChangeObserver: @escaping () -> CalendarChangeObserver = { EventKitChangeObserver() }
-    ) {
-        self.configPath = configPath
-        self.makeChangeObserver = makeChangeObserver
-        isPaused = UserDefaults.standard.bool(forKey: Self.pausedKey)
-        let level = (try? ConfigLoader.load(path: configPath).general.logLevel) ?? .info
-        logger = Logger(level: level)
-        self.notifier = notifier ?? UserNotifier(logger: Logger(level: level))
-        lastRun = LastRunStore.load(path: LastRunStore.path(forConfigAt: configPath))
-        savedSourceIDs = Set(((try? ConfigLoader.load(path: configPath))?.sources ?? []).map(\.id))
+    /// Handles for the work this model starts, so a test can await the actual
+    /// completion — including the model applying the result — rather than
+    /// guessing when a fake was called.
+    @ObservationIgnored var healthTask: Task<Void, Never>?
+    @ObservationIgnored var calendarChoicesTask: Task<Void, Never>?
+    @ObservationIgnored var passTask: Task<Void, Never>?
+
+    /// The only designated initializer, and it is inert: it assigns the state
+    /// it is given and computes what is pure. It calls no service.
+    ///
+    /// That is the whole seam. Construction used to read UserDefaults, load the
+    /// config and last-run files, create the log directory, ask SMAppService for
+    /// a status and start gathering health — so no test could build one without
+    /// touching the machine, and the editing logic that produced eleven rounds
+    /// of fixes was tested through a hand-written copy instead.
+    init(initialState: MenuBarInitialState, services: MenuBarServices) {
+        self.services = services
+        isPausedStorage = initialState.isPaused
+        lastRun = initialState.lastRun
+        savedSourceIDs = initialState.savedSourceIDs
+        refreshState() // pure: derives the icon from state already assigned
+    }
+
+    /// What the initializer used to do at the end of itself.
+    ///
+    /// Production calls this from `live(configPath:)`, at the same point in the
+    /// lifecycle as before. A test calls the same method on an inert model with
+    /// fake services, so startup is exercised rather than skipped.
+    func startInitialRefreshes() {
         refreshLoginItemStatus()
-        refreshState()
         // At launch, so the icon tells the truth before the panel is ever
         // opened — the whole point of surfacing health in the menu bar.
         refreshHealth()
@@ -145,7 +157,7 @@ final class MenuBarModel {
     // MARK: Launch at login
 
     func refreshLoginItemStatus() {
-        loginItemStatus = LoginItem.status
+        loginItemStatus = services.loginItemStatus()
     }
 
     var loginItemDescription: String {
@@ -162,9 +174,9 @@ final class MenuBarModel {
     func toggleLaunchAtLogin() -> String? {
         do {
             if launchesAtLogin {
-                try SMAppService.mainApp.unregister()
+                try services.unregisterLoginItem()
             } else {
-                try SMAppService.mainApp.register()
+                try services.registerLoginItem()
             }
         } catch {
             refreshLoginItemStatus()
@@ -174,14 +186,14 @@ final class MenuBarModel {
         refreshLoginItemStatus()
         if loginItemStatus == .requiresApproval {
             // Normal first-run behavior, not a failure (SPEC §10).
-            SMAppService.openSystemSettingsLoginItems()
+            services.openLoginItemSettings()
             return "Approve WorkSync in System Settings > General > Login Items."
         }
         return nil
     }
 
     var intervalMinutes: Int {
-        (try? ConfigLoader.load(path: configPath).general.intervalMinutes) ?? 10
+        (try? services.loadConfig().general.intervalMinutes) ?? 10
     }
 
     var headerLine: String {
@@ -191,7 +203,7 @@ final class MenuBarModel {
         guard let lastRun else { return "No sync has run yet" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        let when = formatter.localizedString(for: lastRun.finishedAt, relativeTo: Date())
+        let when = formatter.localizedString(for: lastRun.finishedAt, relativeTo: services.now())
         return lastRun.succeeded
             ? "Synced \(when) · \(lastRun.summary)"
             : "Last sync failed \(when)"
@@ -209,24 +221,15 @@ final class MenuBarModel {
         isSyncing = true
         refreshState()
 
-        Task { [configPath, logger] in
-            // Off the main actor: EventKit work must not block the panel.
-            let outcome = await Task.detached(priority: .userInitiated) {
-                PassRunner.run(
-                    configPath: configPath,
-                    makeStore: { EventKitStore() },
-                    logger: logger,
-                    lastRunPath: LastRunStore.path(forConfigAt: configPath)
-                )
-            }.value
-
+        passTask = Task { [services] in
+            let outcome = await services.runPass()
             self.finish(outcome)
         }
     }
 
     private func finish(_ outcome: PassOutcome) {
         isSyncing = false
-        lastRun = LastRunStore.load(path: LastRunStore.path(forConfigAt: configPath))
+        lastRun = services.loadLastRun()
 
         switch outcome.disposition {
         case .completed:
@@ -235,7 +238,7 @@ final class MenuBarModel {
             // echo window is measured from the write rather than from
             // whenever this method happens to finish.
             if outcome.result?.wroteAnything == true {
-                lastWriteAt = .now
+                lastWriteAt = services.now()
             }
             // Only now: a successful pass is proof access is granted, which is
             // what makes starting the observer meaningful (SPEC §11.2).
@@ -274,7 +277,7 @@ final class MenuBarModel {
     /// is running. Reconciling rather than starting once is what makes turning
     /// the feature off actually turn it off.
     func reconcileChangeObservation() {
-        guard let config = try? ConfigLoader.load(path: configPath) else { return }
+        guard let config = try? services.loadConfig() else { return }
 
         switch ChangeObservationPlan.reconcile(
             config: config,
@@ -287,7 +290,7 @@ final class MenuBarModel {
 
         case let .start(policy):
             changePolicy = policy
-            let observer = makeChangeObserver()
+            let observer = services.makeChangeObserver()
             changeObserver = observer
             observer.start { [weak self] in
                 // Notifications arrive on an arbitrary queue; everything below
@@ -296,15 +299,15 @@ final class MenuBarModel {
                     self?.calendarDidChange()
                 }
             }
-            logger.info("change-driven sync enabled (debounce \(policy.debounceSeconds)s)")
+            services.log(.info, "change-driven sync enabled (debounce \(policy.debounceSeconds)s)")
 
         case let .updatePolicy(policy):
             changePolicy = policy
             // A timer already armed under the old debounce would otherwise
             // fire at the old interval once more.
-            changeTimer?.invalidate()
+            changeTimer?.cancel()
             changeTimer = nil
-            logger.info("change-driven debounce now \(policy.debounceSeconds)s")
+            services.log(.info, "change-driven debounce now \(policy.debounceSeconds)s")
 
         case .stop:
             changeObserver?.stop()
@@ -313,29 +316,27 @@ final class MenuBarModel {
             // Without this, a pass already scheduled before the user turned
             // the feature off still fires afterwards — the one sync they
             // explicitly asked not to happen.
-            changeTimer?.invalidate()
+            changeTimer?.cancel()
             changeTimer = nil
-            logger.info("change-driven sync disabled")
+            services.log(.info, "change-driven sync disabled")
         }
     }
 
     private func calendarDidChange() {
         guard let policy = changePolicy, !isPaused else { return }
 
-        switch policy.action(now: .now, lastWriteAt: lastWriteAt) {
+        switch policy.action(now: services.now(), lastWriteAt: lastWriteAt) {
         case .ignoreEcho:
             // Our own commit coming back. Without this, every writing pass
             // schedules exactly one no-op pass behind it, forever.
-            logger.debug("calendar change ignored: own write echo")
+            services.log(.debug, "calendar change ignored: own write echo")
         case let .armTimer(delay):
             // Re-arms the single timer rather than adding another, so a burst
             // of notifications for one user edit collapses into one pass.
-            changeTimer?.invalidate()
-            changeTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.logger.debug("change-driven pass firing")
-                    self?.syncNow()
-                }
+            changeTimer?.cancel()
+            changeTimer = services.scheduleChange(delay) { [weak self] in
+                self?.services.log(.debug, "change-driven pass firing")
+                self?.syncNow()
             }
         }
     }
@@ -347,9 +348,9 @@ final class MenuBarModel {
         // Re-read rather than cached, so switching notify in the settings
         // screen takes effect on the next pass instead of the next launch —
         // matching how every other setting behaves.
-        let mode = (try? ConfigLoader.load(path: configPath).general.notify) ?? .off
+        let mode = (try? services.loadConfig().general.notify) ?? .off
         guard let notification = NotificationPolicy.notification(for: outcome, mode: mode) else { return }
-        notifier.post(notification)
+        services.notifier.post(notification)
     }
 
     private func refreshRunCounts(from outcome: PassOutcome) {
@@ -385,12 +386,8 @@ final class MenuBarModel {
     func refreshHealth() {
         guard !isCheckingHealth else { return }
         isCheckingHealth = true
-        Task { [configPath] in
-            // Detached: shelling out to launchctl and codesign, plus the
-            // EventKit calendar listing, must not block the panel.
-            let report = await Task.detached(priority: .userInitiated) {
-                DoctorChecks.run(DoctorFacts.gather(configPath: configPath))
-            }.value
+        healthTask = Task { [services] in
+            let report = await services.healthReport()
             self.health = report
             self.isCheckingHealth = false
             self.refreshState()
@@ -418,7 +415,7 @@ final class MenuBarModel {
         case .configFile:
             openConfig()
         case .loginItemSettings:
-            SMAppService.openSystemSettingsLoginItems()
+            services.openLoginItemSettings()
         case .calendarPrivacySettings:
             openSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")
         case .notificationSettings:
@@ -428,17 +425,17 @@ final class MenuBarModel {
 
     private func openSettingsPane(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
-        NSWorkspace.shared.open(url)
+        services.openURL(url)
     }
 
     // MARK: Menu actions
 
     func openConfig() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: configPath))
+        services.openURL(services.configURL())
         // Validate immediately rather than letting a bad edit fail invisibly at
         // the next scheduled pass (SPEC §11).
         do {
-            _ = try ConfigLoader.load(path: configPath)
+            _ = try services.loadConfig()
             configError = nil
         } catch {
             configError = error.localizedDescription
@@ -447,8 +444,7 @@ final class MenuBarModel {
     }
 
     func openLog() {
-        let path = (Logger.defaultDirectory as NSString).appendingPathComponent("worksync.log")
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        services.openURL(services.logURL())
     }
 }
 
@@ -467,7 +463,7 @@ extension MenuBarModel {
     /// something quite different from what the user wrote (SPEC §11.1).
     func openSettings() {
         do {
-            let config = try ConfigLoader.load(path: configPath)
+            let config = try services.loadConfig()
             editingConfig = config
             sourceHandles.seed(config.sources.map(\.id))
             sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
@@ -505,13 +501,9 @@ extension MenuBarModel {
     /// `worksync calendars` uses. A popup cannot be typed wrong, and a free-text
     /// typo here hard-errors the whole sync (SPEC §11.1).
     private func loadCalendarChoices() {
-        Task { [weak self] in
-            let calendars = await Task.detached { () -> [CalendarRef] in
-                let store = EventKitStore()
-                guard (try? store.requestAccess()) != nil else { return [] }
-                return (try? store.calendars()) ?? []
-            }.value
-            self?.availableCalendars = calendars
+        calendarChoicesTask = Task { [services] in
+            let calendars = await services.calendarChoices()
+            self.availableCalendars = calendars
         }
     }
 
@@ -988,7 +980,7 @@ extension MenuBarModel {
 
         guard let config = editingConfig else { return }
         do {
-            let outcome = try ConfigWriter.save(config, to: configPath, sourceOrigins: sourceOrigins)
+            let outcome = try services.saveConfig(config, sourceOrigins)
             saveError = nil
             saveWarning = outcome.warning
             savedSourceIDs = Set(config.sources.map(\.id))

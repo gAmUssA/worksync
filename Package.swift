@@ -39,5 +39,12 @@ let package = Package(
             name: "WorkSyncCoreTests",
             dependencies: ["WorkSyncCore"]
         ),
+        // The menu bar model, tested against the real thing. Importing an
+        // executable target works on this toolchain and on CI (macos-15, Swift
+        // 6.1.2) with `main` not running — see docs/testing-menubar.md.
+        .testTarget(
+            name: "WorkSyncAppTests",
+            dependencies: ["worksync", "WorkSyncCore"]
+        ),
     ]
 )

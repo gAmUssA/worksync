@@ -356,6 +356,24 @@ the parts that look arbitrary: why identity is keyed on
 truncates, why the marker lives in event notes rather than the URL field, and
 why the app is a bundle rather than a bare binary.
 
+## Testing
+
+```sh
+swift test        # WorkSyncCoreTests + WorkSyncAppTests
+```
+
+`WorkSyncCoreTests` covers the pure logic. `WorkSyncAppTests` covers the real
+`MenuBarModel` — selection, drafts, row identity, renames, saving and reordering
+— through an injected service seam, so the suite never prompts for calendar
+access or touches your config.
+
+Three layers cannot run on a CI runner and are checked by hand: `SettingsView`
+(SwiftUI bindings and rendering), `StatusItemController` (NSStatusItem and panel
+behaviour), and the native service adapters (`LiveMenuBarServices`,
+`UserNotifier`, `EventKitStore`, `DoctorFacts`, `LoginItem`). What that means and
+how to drive the real panel — including the `AXOutline` row-selection technique,
+since `AXPress` on a row fails — is in [docs/testing-menubar.md](docs/testing-menubar.md).
+
 ## License
 
 MIT.

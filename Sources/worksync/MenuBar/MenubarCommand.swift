@@ -59,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
         guard claimSingleInstance() else { return }
 
-        let model = MenuBarModel(configPath: configPath)
+        let model = MenuBarModel.live(configPath: configPath)
         let controller = StatusItemController(model: model)
         self.controller = controller
 
