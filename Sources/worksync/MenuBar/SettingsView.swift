@@ -248,6 +248,8 @@ struct SettingsView: View {
                     writableOnly: false
                 )
 
+                targetCalendarPicker(handle, source: source)
+
                 LabeledContent("Shown as") {
                     TextField("Busy", text: Binding(
                         get: { source.titleTemplate },
@@ -272,10 +274,52 @@ struct SettingsView: View {
                     set: { value in model.updateSource(handle) { $0.minDurationMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
+                // `0` is "no limit", not zero minutes, so the value is rendered
+                // rather than printed.
+                Stepper(value: Binding(
+                    get: { source.maxDurationMinutes },
+                    set: { value in model.updateSource(handle) { $0.maxDurationMinutes = value } }
+                ), in: 0 ... 1440) {
+                    HStack {
+                        Text("Ignore longer than")
+                        Spacer()
+                        Text(SourceFieldRules.maxDurationDescription(source.maxDurationMinutes))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.callout)
+                .accessibilityLabel("Ignore events longer than")
+
+                if let problem = SourceFieldRules.maxDurationProblem(
+                    max: source.maxDurationMinutes, min: source.minDurationMinutes
+                ) {
+                    Text(problem).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Toggle("Merge nearby events", isOn: Binding(
                     get: { source.coalesce },
                     set: { value in model.updateSource(handle) { $0.coalesce = value } }
                 )).font(.callout)
+
+                // Nested under the toggle it depends on: the gap decides when
+                // two events become one blocker, which only happens while
+                // merging is on.
+                VStack(alignment: .leading, spacing: 2) {
+                    stepper("Merge when closer than", value: Binding(
+                        get: { source.coalesceGapMinutes },
+                        set: { value in model.updateSource(handle) { $0.coalesceGapMinutes = value } }
+                    ), range: 0 ... 480, suffix: "min")
+                        .disabled(!SourceFieldRules.coalesceGapApplies(coalesce: source.coalesce))
+                        .accessibilityLabel("Merge events closer together than")
+
+                    if !SourceFieldRules.coalesceGapApplies(coalesce: source.coalesce) {
+                        Text(SourceFieldRules.coalesceGapUnusedNote)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.leading, 12)
 
                 Toggle("Include all-day events", isOn: Binding(
                     get: { source.includeAllDay },
@@ -292,6 +336,8 @@ struct SettingsView: View {
                     set: { value in model.updateSource(handle) { $0.availability = value } }
                 ), options: Availability.allCases, label: \.rawValue)
 
+                skippedDays(handle, source: source)
+
                 Divider()
 
                 // The one place a user is likely to assume the wrong thing:
@@ -304,6 +350,97 @@ struct SettingsView: View {
 
                 titleFilterEditor(.matches, source: handle, entries: source.titleMatches)
                 titleFilterEditor(.excludes, source: handle, entries: source.titleExcludes)
+            }
+        }
+    }
+
+    /// Which work calendar this source's blockers go to.
+    ///
+    /// A popup for the same reason the account and calendar pickers are popups:
+    /// a free-text typo in a calendar title hard-errors the whole sync (SPEC
+    /// §11.1), and a popup cannot be wrong. Empty means the target calendar, so
+    /// that is a row rather than a blank.
+    @ViewBuilder
+    private func targetCalendarPicker(_ handle: SourceHandle, source: SourceConfig) -> some View {
+        // Resolved in the TARGET account, not this source's account — that is
+        // where blockers are written (SPEC §4.1).
+        let targetAccount = model.editingConfig?.target.account ?? ""
+        let inherited = model.editingConfig?.target.calendar ?? ""
+        // Only titles that name one calendar: a title shared by two resolves to
+        // neither, so offering it would be the hard sync error this popup exists
+        // to prevent.
+        let calendars = model.targetCalendarChoices(for: source)
+        let problem = model.calendarTitleProblem(
+            source.targetCalendar, inAccount: targetAccount
+        ) ?? model.feedbackLoopProblem ?? model.targetWritabilityProblem
+
+        Picker("Write blockers to", selection: Binding(
+            get: { SourceFieldRules.pickerSelection(source.targetCalendar, choices: calendars) },
+            set: { value in model.updateSource(handle) { $0.targetCalendar = value } }
+        )) {
+            // Preserve an invalid saved value visibly, but do not offer it as
+            // a selectable destination. This also handles unsafe inheritance.
+            if !calendars.contains(where: { Resolver.namesMatch($0, source.targetCalendar) }) {
+                Text(SourceFieldRules.targetCalendarDescription(source.targetCalendar, inheriting: inherited)
+                    + (problem == nil ? " (not found)" : " (unavailable)"))
+                    .tag(source.targetCalendar)
+                    .disabled(true)
+            }
+            ForEach(calendars, id: \.self) { title in
+                Text(SourceFieldRules.targetCalendarDescription(title, inheriting: inherited)).tag(title)
+            }
+        }
+        .font(.callout)
+
+        if let problem {
+            Text(problem).font(.caption).foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Days this source mirrors nothing on.
+    ///
+    /// Seven switches rather than a multi-select, so each day says what it is to
+    /// a screen reader. The last remaining day refuses to turn on: skipping all
+    /// seven mirrors nothing, and `ConfigLoader.validate` rejects it — better to
+    /// stop the click than to explain the error it would have caused.
+    private func skippedDays(_ handle: SourceHandle, source: SourceConfig) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Skip these days").font(.callout)
+                Spacer()
+                Text(SourceFieldRules.skippedDaysDescription(source.skipWeekdays) ?? "none")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 4) {
+                ForEach(Weekday.pickerOrder, id: \.self) { component in
+                    let name = Weekday.name(for: component) ?? ""
+                    let isSkipped = source.skipWeekdays.contains(component)
+                    Toggle(name.capitalized, isOn: Binding(
+                        get: { isSkipped },
+                        set: { value in
+                            model.updateSource(handle) { edited in
+                                if value {
+                                    edited.skipWeekdays.insert(component)
+                                } else {
+                                    edited.skipWeekdays.remove(component)
+                                }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.button)
+                    .font(.caption)
+                    .disabled(!SourceFieldRules.canSkip(component, given: source.skipWeekdays))
+                    .accessibilityLabel("Skip \(name.capitalized)")
+                }
+            }
+
+            // One day left, and it will not turn on.
+            if source.skipWeekdays.count == Weekday.componentCount - 1 {
+                Text(SourceFieldRules.lastDayRefusedNote)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -403,7 +540,7 @@ struct SettingsView: View {
     private var footer: some View {
         HStack {
             if let message = SettingsMessagePolicy.footerMessage(
-                validationProblem: model.titleFilterProblem,
+                validationProblem: model.settingsProblem,
                 saveError: model.saveError
             ) {
                 Text(message)
@@ -417,7 +554,7 @@ struct SettingsView: View {
             Button("Save") { model.saveSettings() }
                 .glassButton()
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.editingConfig == nil || model.titleFilterProblem != nil)
+                .disabled(model.editingConfig == nil || model.settingsProblem != nil)
         }
         .padding(.horizontal, Theme.padding)
         .frame(height: Theme.barHeight)
@@ -480,32 +617,51 @@ struct SettingsView: View {
         writableOnly: Bool
     ) -> some View {
         let accounts = model.accountChoices
-        let calendars = writableOnly
-            ? model.writableCalendarChoices(inAccount: account.wrappedValue)
-            : model.calendarChoices(inAccount: account.wrappedValue)
+        // Same rule as the target picker: a title naming two calendars is not a
+        // choice, whichever one the user means.
+        let calendars = model.selectableCalendarChoices(
+            inAccount: account.wrappedValue, writableOnly: writableOnly
+        )
+        let problem = model.calendarTitleProblem(
+            calendar.wrappedValue, inAccount: account.wrappedValue
+        )
 
         if accounts.isEmpty {
             Text("No calendars available — grant calendar access first.")
                 .font(.caption).foregroundStyle(.secondary)
         } else {
-            Picker("Account", selection: account) {
+            Picker("Account", selection: Binding(
+                get: { SourceFieldRules.pickerSelection(account.wrappedValue, choices: accounts) },
+                set: { account.wrappedValue = $0 }
+            )) {
                 // The saved value may name an account that no longer exists;
                 // keeping it in the list stops the picker silently rewriting
                 // config to something the user never chose.
-                if !accounts.contains(account.wrappedValue) {
+                if !accounts.contains(where: { Resolver.namesMatch($0, account.wrappedValue) }) {
                     Text("\(account.wrappedValue) (not found)").tag(account.wrappedValue)
                 }
                 ForEach(accounts, id: \.self) { Text($0).tag($0) }
             }
             .font(.callout)
 
-            Picker("Calendar", selection: calendar) {
-                if !calendars.contains(calendar.wrappedValue) {
-                    Text("\(calendar.wrappedValue) (not found)").tag(calendar.wrappedValue)
+            Picker("Calendar", selection: Binding(
+                get: { SourceFieldRules.pickerSelection(calendar.wrappedValue, choices: calendars) },
+                set: { calendar.wrappedValue = $0 }
+            )) {
+                if !calendars.contains(where: { Resolver.namesMatch($0, calendar.wrappedValue) }) {
+                    Text(problem == nil
+                        ? "\(calendar.wrappedValue) (not found)"
+                        : "\(calendar.wrappedValue) (name used twice)"
+                    ).tag(calendar.wrappedValue)
                 }
                 ForEach(calendars, id: \.self) { Text($0).tag($0) }
             }
             .font(.callout)
+
+            if let problem {
+                Text(problem).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

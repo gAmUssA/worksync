@@ -292,16 +292,14 @@ public enum DoctorChecks {
         if let blockedBy {
             return .skipped(id: id, title, because: blockedBy)
         }
-        let readOnly = report.resolved.allTargets.filter { !$0.allowsModifications }
+        let readOnly = report.resolved.allTargets.filter { $0.writabilityProblem != nil }
         guard let first = readOnly.first else {
             return .ok(
                 id: id, title,
                 detail: report.resolved.allTargets.map { "\($0.accountTitle) / \($0.title)" }
             )
         }
-        // allowsModifications is already populated on every CalendarRef, but
-        // today it only surfaces at write time — after a pass has done all of
-        // its reading and has a plan it cannot apply.
+        // Use the same permission check as target choices and the save guard.
         return .failure(
             id: id,
             title,

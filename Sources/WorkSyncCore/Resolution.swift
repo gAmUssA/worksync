@@ -49,6 +49,17 @@ public struct ResolutionReport: Sendable {
 }
 
 public enum Resolver {
+    /// The name comparison used for both account and calendar resolution.
+    /// Settings must use this too; exact-string grouping disagrees with sync.
+    public static func namesMatch(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.caseInsensitiveCompare(rhs) == .orderedSame
+    }
+
+    /// All calendars in the resolver's account scope, including read-only ones.
+    public static func calendars(inAccount account: String, among calendars: [CalendarRef]) -> [CalendarRef] {
+        calendars.filter { namesMatch($0.accountTitle, account) }
+    }
+
     /// Resolves every source and target calendar, case-insensitively, and enforces
     /// the ambiguity and source==target guards (SPEC §4.1, §9).
     ///
@@ -82,11 +93,8 @@ public enum Resolver {
                 problems.append(error)
             } catch {}
 
-            let targetTitle = source.targetCalendar.isEmpty ? config.target.calendar : source.targetCalendar
             do {
-                targetCals[source.id] = try find(
-                    account: config.target.account, calendar: targetTitle, in: calendars
-                )
+                targetCals[source.id] = try target(for: source, config: config, calendars: calendars)
             } catch let error as ResolutionError {
                 // Sources commonly share one target, so the same miss would
                 // otherwise be reported once per source.
@@ -114,14 +122,29 @@ public enum Resolver {
         )
     }
 
+    /// Resolve the effective target, including the empty per-source override.
+    public static func target(
+        for source: SourceConfig,
+        config: Config,
+        calendars: [CalendarRef]
+    ) throws -> CalendarRef {
+        try find(
+            account: config.target.account,
+            calendar: source.targetCalendar.isEmpty ? config.target.calendar : source.targetCalendar,
+            in: calendars
+        )
+    }
+
     private static func find(account: String, calendar: String, in calendars: [CalendarRef]) throws -> CalendarRef {
-        let accountMatches = calendars.filter { $0.accountTitle.caseInsensitiveCompare(account) == .orderedSame }
+        let accountMatches = Self.calendars(inAccount: account, among: calendars)
         guard !accountMatches.isEmpty else {
-            var seen = Set<String>()
-            let available = calendars.map(\.accountTitle).filter { seen.insert($0).inserted }
+            var available: [String] = []
+            for title in calendars.map(\.accountTitle) where !available.contains(where: { namesMatch($0, title) }) {
+                available.append(title)
+            }
             throw ResolutionError.accountNotFound(account, available: available)
         }
-        let matches = accountMatches.filter { $0.title.caseInsensitiveCompare(calendar) == .orderedSame }
+        let matches = accountMatches.filter { namesMatch($0.title, calendar) }
         switch matches.count {
         case 0:
             throw ResolutionError.calendarNotFound(

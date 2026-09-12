@@ -73,8 +73,8 @@ public final class InMemoryCalendarStore: CalendarStore {
         guard let calendar = calendarList.first(where: { $0.id == block.calendarId }) else {
             throw CalendarStoreError.backendError("unknown calendar \(block.calendarId)")
         }
-        guard calendar.allowsModifications else {
-            throw CalendarStoreError.calendarNotWritable(calendar.title)
+        if let problem = calendar.writabilityProblem {
+            throw problem
         }
         let id = "mem-\(nextID)"
         nextID += 1

@@ -1,10 +1,10 @@
 ---
 # worksync-t4qp
 title: 'Settings UI: editors for the four missing source fields'
-status: todo
+status: completed
 type: feature
 created_at: 2026-09-11T23:55:00Z
-updated_at: 2026-09-11T23:55:00Z
+updated_at: 2026-09-12T00:30:00Z
 ---
 
 `SettingsView.sourceDetail` has no control for four per-source fields. They are
@@ -16,19 +16,32 @@ Found by Copilot reviewing the title-filter editors, and it predates that work:
 missing before the filters landed. `coalesce_gap_minutes` was missing too and
 went unnamed in that review.
 
-[ ] `target_calendar` — a calendar popup like `[target]`'s, plus an "inherit the
+[x] `target_calendar` — a calendar popup like `[target]`'s, plus an "inherit the
     target calendar" state for the empty default. Resolver-backed, never free
     text (§11.1: a typo hard-errors the whole sync)
-[ ] `coalesce_gap_minutes` — a stepper, and it only means anything while
+[x] `coalesce_gap_minutes` — a stepper, and it only means anything while
     `coalesce` is on
-[ ] `max_duration_minutes` — a stepper. `0` is "unlimited", not zero minutes, and
+[x] `max_duration_minutes` — a stepper. `0` is "unlimited", not zero minutes, and
     `validate` rejects a non-zero value below `min_duration_minutes`, so the
     control has to express both
-[ ] `skip_weekdays` — seven toggles or a segmented picker. `validate` rejects all
+[x] `skip_weekdays` — seven toggles or a segmented picker. `validate` rejects all
     seven (skipping every day mirrors nothing), so the UI should refuse the
     seventh rather than let the save fail
-[ ] Update SPEC §11.1 as each one lands; restore the "every source field" wording
+[x] Update SPEC §11.1 as each one lands; restore the "every source field" wording
     only when the list is empty
 
 ## Related
 - worksync-w2k7 — the title-filter list editors, and the SPEC correction
+
+## Landed
+All four have controls, so SPEC §11.1 goes back to "covers every source field" —
+checked against `SourceConfig` field by field rather than assumed.
+
+`SourceFieldRules` (WorkSyncCore) holds every decision: `0` reading as "no
+limit", a maximum below the minimum, the seventh weekday refusing to switch on,
+the gap applying only while merging is on, and the empty target calendar naming
+the default it inherits. That is where the tests are, because the menu bar
+target still has no harness — `worksync-x7nc`.
+
+`target_calendar` resolves in the TARGET account (`Resolution.swift`), not the
+source's own, so its popup lists that account's writable calendars.

@@ -516,22 +516,52 @@ extension MenuBarModel {
     }
 
     var accountChoices: [String] {
-        var seen = Set<String>()
-        return availableCalendars.map(\.accountTitle).filter { seen.insert($0).inserted }.sorted()
+        SourceFieldRules.accountChoices(in: availableCalendars)
     }
 
     func calendarChoices(inAccount account: String) -> [String] {
-        availableCalendars
-            .filter { $0.accountTitle.caseInsensitiveCompare(account) == .orderedSame }
+        Resolver.calendars(inAccount: account, among: availableCalendars)
             .map(\.title)
             .sorted()
     }
 
-    func writableCalendarChoices(inAccount account: String) -> [String] {
-        availableCalendars
-            .filter { $0.accountTitle.caseInsensitiveCompare(account) == .orderedSame && $0.allowsModifications }
-            .map(\.title)
-            .sorted()
+    /// The titles a config can actually name in `account`.
+    ///
+    /// A title shared by two calendars resolves to neither — `Resolver.find`
+    /// refuses it — so offering it would be a popup that can be wrong, which is
+    /// the one thing a popup is here to prevent (SPEC §11.1).
+    func selectableCalendarChoices(inAccount account: String, writableOnly: Bool) -> [String] {
+        SourceFieldRules.selectableCalendarChoices(
+            in: availableCalendars, account: account, writableOnly: writableOnly
+        )
+    }
+
+    /// Why the calendar `title` cannot be used in `account`, or nil. Empty while
+    /// the calendar list is still loading, since nothing is known to collide.
+    func calendarTitleProblem(_ title: String, inAccount account: String) -> String? {
+        SourceFieldRules.calendarTitleProblem(
+            title,
+            among: calendarChoices(inAccount: account)
+        )
+    }
+
+    func targetCalendarChoices(for source: SourceConfig) -> [String] {
+        guard let config = editingConfig else { return [] }
+        return SourceFieldRules.targetCalendarChoices(
+            sourceID: source.id,
+            config: config,
+            calendars: availableCalendars
+        )
+    }
+
+    var targetWritabilityProblem: String? {
+        guard let config = editingConfig else { return nil }
+        return SourceFieldRules.targetWritabilityProblem(config: config, calendars: availableCalendars)
+    }
+
+    var feedbackLoopProblem: String? {
+        guard let config = editingConfig else { return nil }
+        return SourceFieldRules.feedbackLoopProblem(config: config, calendars: availableCalendars)
     }
 
     // MARK: Source list
@@ -557,9 +587,7 @@ extension MenuBarModel {
             name = "\(base)-\(counter)"
             counter += 1
         }
-        let account = accountChoices.first ?? ""
-        let calendar = calendarChoices(inAccount: account).first ?? ""
-        config.sources.append(SourceConfig(id: name, account: account, calendar: calendar))
+        config.sources.append(SourceFieldRules.newSource(id: name, config: config, calendars: availableCalendars))
         editingConfig = config
         // The dirty id draft was already committed above, while the list still
         // looked the way the user left it.
@@ -951,6 +979,50 @@ extension MenuBarModel {
         return nil
     }
 
+    /// Why a source's numeric or weekday fields cannot be saved, or nil.
+    ///
+    /// The form refuses each of these at the control — the seventh day will not
+    /// switch on, and a maximum below the minimum shows its reason under the
+    /// stepper — so this is the backstop that keeps a bad combination from
+    /// reaching save without a field-specific explanation. Duration and weekday
+    /// rules also live in `ConfigLoader.validate`; calendar ambiguity uses the
+    /// loaded enumeration here and is enforced by `Resolver` during sync.
+    var sourceFieldProblem: String? {
+        guard let config = editingConfig else { return nil }
+        for source in config.sources {
+            if let problem = SourceFieldRules.maxDurationProblem(
+                max: source.maxDurationMinutes, min: source.minDurationMinutes
+            ) {
+                return "“\(source.id)”: \(problem)"
+            }
+            if let problem = SourceFieldRules.skippedDaysProblem(source.skipWeekdays) {
+                return "“\(source.id)”: \(problem)"
+            }
+            if let problem = calendarTitleProblem(
+                source.calendar, inAccount: source.account
+            ) {
+                return "“\(source.id)”: \(problem)"
+            }
+            if let problem = calendarTitleProblem(
+                source.targetCalendar, inAccount: config.target.account
+            ) {
+                return "“\(source.id)” writes to \(problem)"
+            }
+        }
+        if let problem = calendarTitleProblem(
+            config.target.calendar, inAccount: config.target.account
+        ) {
+            return "Target calendar: \(problem)"
+        }
+        return nil
+    }
+
+    /// Everything that stops a save, in the order the user is most likely to be
+    /// looking at.
+    var settingsProblem: String? {
+        titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem ?? targetWritabilityProblem
+    }
+
     // MARK: Saving
 
     /// Writes through the same writer everything else uses — comment
@@ -981,7 +1053,7 @@ extension MenuBarModel {
         // Never reachable through the form, which disables Save on a problem —
         // but the writer's validation would name a config field rather than the
         // row that caused it, so the readable message is produced here.
-        if let problem = titleFilterProblem {
+        if let problem = settingsProblem {
             saveError = problem
             return
         }
