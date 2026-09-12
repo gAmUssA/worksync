@@ -951,6 +951,34 @@ extension MenuBarModel {
         return nil
     }
 
+    /// Why a source's numeric or weekday fields cannot be saved, or nil.
+    ///
+    /// The form refuses each of these at the control — the seventh day will not
+    /// switch on, and a maximum below the minimum shows its reason under the
+    /// stepper — so this is the backstop that keeps a bad combination from
+    /// reaching `ConfigLoader.validate`, where the error would name a config key
+    /// instead of the field.
+    var sourceFieldProblem: String? {
+        guard let config = editingConfig else { return nil }
+        for source in config.sources {
+            if let problem = SourceFieldRules.maxDurationProblem(
+                max: source.maxDurationMinutes, min: source.minDurationMinutes
+            ) {
+                return "“\(source.id)”: \(problem)"
+            }
+            if let problem = SourceFieldRules.skippedDaysProblem(source.skipWeekdays) {
+                return "“\(source.id)”: \(problem)"
+            }
+        }
+        return nil
+    }
+
+    /// Everything that stops a save, in the order the user is most likely to be
+    /// looking at.
+    var settingsProblem: String? {
+        titleFilterProblem ?? sourceFieldProblem
+    }
+
     // MARK: Saving
 
     /// Writes through the same writer everything else uses — comment
@@ -981,7 +1009,7 @@ extension MenuBarModel {
         // Never reachable through the form, which disables Save on a problem —
         // but the writer's validation would name a config field rather than the
         // row that caused it, so the readable message is produced here.
-        if let problem = titleFilterProblem {
+        if let problem = settingsProblem {
             saveError = problem
             return
         }

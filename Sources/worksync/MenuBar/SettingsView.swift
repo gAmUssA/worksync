@@ -245,6 +245,8 @@ struct SettingsView: View {
                     writableOnly: false
                 )
 
+                targetCalendarPicker(handle, source: source)
+
                 LabeledContent("Shown as") {
                     TextField("Busy", text: Binding(
                         get: { source.titleTemplate },
@@ -269,10 +271,52 @@ struct SettingsView: View {
                     set: { value in model.updateSource(handle) { $0.minDurationMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
+                // `0` is "no limit", not zero minutes, so the value is rendered
+                // rather than printed.
+                Stepper(value: Binding(
+                    get: { source.maxDurationMinutes },
+                    set: { value in model.updateSource(handle) { $0.maxDurationMinutes = value } }
+                ), in: 0 ... 1440) {
+                    HStack {
+                        Text("Ignore longer than")
+                        Spacer()
+                        Text(SourceFieldRules.maxDurationDescription(source.maxDurationMinutes))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.callout)
+                .accessibilityLabel("Ignore events longer than")
+
+                if let problem = SourceFieldRules.maxDurationProblem(
+                    max: source.maxDurationMinutes, min: source.minDurationMinutes
+                ) {
+                    Text(problem).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Toggle("Merge nearby events", isOn: Binding(
                     get: { source.coalesce },
                     set: { value in model.updateSource(handle) { $0.coalesce = value } }
                 )).font(.callout)
+
+                // Nested under the toggle it depends on: the gap decides when
+                // two events become one blocker, which only happens while
+                // merging is on.
+                VStack(alignment: .leading, spacing: 2) {
+                    stepper("Merge when closer than", value: Binding(
+                        get: { source.coalesceGapMinutes },
+                        set: { value in model.updateSource(handle) { $0.coalesceGapMinutes = value } }
+                    ), range: 0 ... 480, suffix: "min")
+                        .disabled(!SourceFieldRules.coalesceGapApplies(coalesce: source.coalesce))
+                        .accessibilityLabel("Merge events closer together than")
+
+                    if !SourceFieldRules.coalesceGapApplies(coalesce: source.coalesce) {
+                        Text(SourceFieldRules.coalesceGapUnusedNote)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.leading, 12)
 
                 Toggle("Include all-day events", isOn: Binding(
                     get: { source.includeAllDay },
@@ -289,6 +333,8 @@ struct SettingsView: View {
                     set: { value in model.updateSource(handle) { $0.availability = value } }
                 ), options: Availability.allCases, label: \.rawValue)
 
+                skippedDays(handle, source: source)
+
                 Divider()
 
                 // The one place a user is likely to assume the wrong thing:
@@ -301,6 +347,87 @@ struct SettingsView: View {
 
                 titleFilterEditor(.matches, source: handle, entries: source.titleMatches)
                 titleFilterEditor(.excludes, source: handle, entries: source.titleExcludes)
+            }
+        }
+    }
+
+    /// Which work calendar this source's blockers go to.
+    ///
+    /// A popup for the same reason the account and calendar pickers are popups:
+    /// a free-text typo in a calendar title hard-errors the whole sync (SPEC
+    /// §11.1), and a popup cannot be wrong. Empty means the target calendar, so
+    /// that is a row rather than a blank.
+    @ViewBuilder
+    private func targetCalendarPicker(_ handle: SourceHandle, source: SourceConfig) -> some View {
+        // Resolved in the TARGET account, not this source's account — that is
+        // where blockers are written (SPEC §4.1).
+        let targetAccount = model.editingConfig?.target.account ?? ""
+        let inherited = model.editingConfig?.target.calendar ?? ""
+        let calendars = model.writableCalendarChoices(inAccount: targetAccount)
+
+        Picker("Write blockers to", selection: Binding(
+            get: { source.targetCalendar },
+            set: { value in model.updateSource(handle) { $0.targetCalendar = value } }
+        )) {
+            Text(SourceFieldRules.targetCalendarDescription(
+                SourceFieldRules.inheritedTargetCalendar, inheriting: inherited
+            ))
+            .tag(SourceFieldRules.inheritedTargetCalendar)
+
+            // A saved value naming a calendar that no longer exists stays in the
+            // list, so the picker cannot silently rewrite config to something
+            // the user never chose.
+            if !source.targetCalendar.isEmpty, !calendars.contains(source.targetCalendar) {
+                Text("\(source.targetCalendar) (not found)").tag(source.targetCalendar)
+            }
+            ForEach(calendars, id: \.self) { Text($0).tag($0) }
+        }
+        .font(.callout)
+    }
+
+    /// Days this source mirrors nothing on.
+    ///
+    /// Seven switches rather than a multi-select, so each day says what it is to
+    /// a screen reader. The last remaining day refuses to turn on: skipping all
+    /// seven mirrors nothing, and `ConfigLoader.validate` rejects it — better to
+    /// stop the click than to explain the error it would have caused.
+    private func skippedDays(_ handle: SourceHandle, source: SourceConfig) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Skip these days").font(.callout)
+                Spacer()
+                Text(SourceFieldRules.skippedDaysDescription(source.skipWeekdays) ?? "none")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 4) {
+                ForEach(Weekday.pickerOrder, id: \.self) { component in
+                    let name = Weekday.name(for: component) ?? ""
+                    let isSkipped = source.skipWeekdays.contains(component)
+                    Toggle(name.capitalized, isOn: Binding(
+                        get: { isSkipped },
+                        set: { value in
+                            model.updateSource(handle) { edited in
+                                if value {
+                                    edited.skipWeekdays.insert(component)
+                                } else {
+                                    edited.skipWeekdays.remove(component)
+                                }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.button)
+                    .font(.caption)
+                    .disabled(!SourceFieldRules.canSkip(component, given: source.skipWeekdays))
+                    .accessibilityLabel("Skip \(name.capitalized)")
+                }
+            }
+
+            // One day left, and it will not turn on.
+            if source.skipWeekdays.count == Weekday.componentCount - 1 {
+                Text(SourceFieldRules.lastDayRefusedNote)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -400,7 +527,7 @@ struct SettingsView: View {
     private var footer: some View {
         HStack {
             if let message = SettingsMessagePolicy.footerMessage(
-                validationProblem: model.titleFilterProblem,
+                validationProblem: model.settingsProblem,
                 saveError: model.saveError
             ) {
                 Text(message)
@@ -414,7 +541,7 @@ struct SettingsView: View {
             Button("Save") { model.saveSettings() }
                 .glassButton()
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.editingConfig == nil || model.titleFilterProblem != nil)
+                .disabled(model.editingConfig == nil || model.settingsProblem != nil)
         }
         .padding(.horizontal, Theme.padding)
         .frame(height: Theme.barHeight)

@@ -15,6 +15,10 @@ public enum Weekday {
 
     public static let allowedNames = "mon | tue | wed | thu | fri | sat | sun (full names accepted)"
 
+    /// How many days there are to skip. Named rather than written as 7 at each
+    /// use, since "all of them" is a rule the form and the validator share.
+    public static let componentCount = 7
+
     public static func component(from name: String) -> Int? {
         byName[name.lowercased().trimmingCharacters(in: .whitespaces)]
     }
@@ -27,6 +31,11 @@ public enum Weekday {
     public static func name(for component: Int) -> String? {
         shortNames[component]
     }
+
+    /// Monday first, the order a week is read in — and the order
+    /// `sortedForWriting` puts a saved set in, so the switches and the file
+    /// agree.
+    public static let pickerOrder = [2, 3, 4, 5, 6, 7, 1]
 
     /// Week order starting Monday, so a written config reads
     /// `["sat", "sun"]` rather than `["sun", "sat"]`.
