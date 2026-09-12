@@ -99,12 +99,12 @@ final class SettingsTitleFilterTests: XCTestCase {
         let row = try XCTUnwrap(model.titleFilterRows(.matches, of: personal).first)
         model.setTitleFilterEntry("", .matches, of: personal, row: row.id)
 
-        XCTAssertEqual(
-            SettingsMessagePolicy.footerMessage(
-                validationProblem: model.titleFilterProblem, saveError: model.saveError
-            ),
-            model.titleFilterProblem
+        let problem = try XCTUnwrap(model.titleFilterProblem, "the model must see the emptied row")
+        let shown = SettingsMessagePolicy.footerMessage(
+            validationProblem: model.titleFilterProblem, saveError: model.saveError
         )
+        XCTAssertEqual(shown, problem)
+        XCTAssertNotEqual(shown, model.saveError, "the stale write error must not be what the user reads")
     }
 
     // MARK: The add field

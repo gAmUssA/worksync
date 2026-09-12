@@ -112,6 +112,7 @@ private struct RecordedSchedule: MenuBarScheduledAction {
 @MainActor
 final class CalendarLookupGate {
     private var waiting: [CheckedContinuation<[CalendarRef], Never>] = []
+    private var starts: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private(set) var started = 0
 
     var outstanding: Int {
@@ -120,7 +121,22 @@ final class CalendarLookupGate {
 
     func lookup() async -> [CalendarRef] {
         started += 1
+        for waiter in starts where waiter.count <= started {
+            waiter.continuation.resume()
+        }
+        starts.removeAll { $0.count <= started }
         return await withCheckedContinuation { waiting.append($0) }
+    }
+
+    /// Waits until `count` lookups have started.
+    ///
+    /// The lookup runs off the main actor, so a test cannot assume it has begun
+    /// on the next line. This waits for the event itself rather than for a
+    /// length of time: a poll with a deadline passes on a fast machine and
+    /// flakes on a loaded one.
+    func waitForStart(_ count: Int) async {
+        guard started < count else { return }
+        await withCheckedContinuation { starts.append((count, $0)) }
     }
 
     /// Finishes the lookup that started first — the slow one.

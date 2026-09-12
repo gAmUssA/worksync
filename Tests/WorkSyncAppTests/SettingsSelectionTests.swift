@@ -59,11 +59,14 @@ final class SettingsSelectionTests: XCTestCase {
         let (model, _, _) = try await opened()
         let travel = try handle(model, "travel")
 
+        // The view's change handler is the selection path; assigning
+        // `selectedSource` here as well would assert against state the test put
+        // there rather than against what the model did with it.
         model.seedSourceIDDraft(for: travel)
-        model.selectedSource = travel
 
+        XCTAssertEqual(model.selectedSource, travel)
         XCTAssertEqual(model.selectedSourceID, "travel")
-        XCTAssertEqual(model.source(for: travel)?.calendar, "Travel")
+        XCTAssertEqual(model.source(for: model.selectedSource)?.calendar, "Travel")
     }
 
     func testSelectingBackResolvesToTheFirstSourceAgain() async throws {
@@ -72,8 +75,13 @@ final class SettingsSelectionTests: XCTestCase {
         let travel = try handle(model, "travel")
 
         model.seedSourceIDDraft(for: travel)
-        model.seedSourceIDDraft(for: personal)
+        // Asserted before switching back: otherwise a selection path that never
+        // moved would leave the form on "personal" throughout and every
+        // assertion below would still hold.
+        XCTAssertEqual(model.selectedSourceID, "travel")
+        XCTAssertEqual(model.source(for: model.selectedSource)?.calendar, "Travel")
 
+        model.seedSourceIDDraft(for: personal)
         XCTAssertEqual(model.selectedSourceID, "personal")
         XCTAssertEqual(model.source(for: model.selectedSource)?.calendar, "Personal")
     }
@@ -128,7 +136,9 @@ final class SettingsSelectionTests: XCTestCase {
         let before = model.titleFilterRows(.matches, of: personal).map(\.id)
 
         model.seedSourceIDDraft(for: travel)
+        XCTAssertEqual(model.selectedSource, travel, "the switch has to happen for this to mean anything")
         model.seedSourceIDDraft(for: personal)
+        XCTAssertEqual(model.selectedSource, personal)
 
         XCTAssertEqual(model.titleFilterRows(.matches, of: personal).map(\.id), before)
     }
@@ -154,6 +164,7 @@ final class SettingsSelectionTests: XCTestCase {
         model.setSourceName("home", of: personal)
         model.commitSourceName(of: personal)
 
+        XCTAssertEqual(model.source(for: personal)?.id, "home", "the rename has to land first")
         XCTAssertEqual(model.titleFilterDraft(.matches, of: personal), "standup")
     }
 
@@ -240,6 +251,13 @@ final class SettingsSelectionTests: XCTestCase {
         let travel = try handle(model, "travel")
         model.removeSelectedSource()
 
+        // The selection itself goes back to the dead handle — the list can still
+        // be holding it. Without this the test only covers stale setters, and a
+        // regression in resolving a stale selection would pass.
+        model.seedSourceIDDraft(for: personal)
+        XCTAssertNil(model.selectedSourceID, "a removed source names nothing")
+        XCTAssertNil(model.source(for: model.selectedSource))
+
         model.setTitleFilterDraft(.matches, to: "stale", of: personal)
         model.setSourceName("stale", of: personal)
 
@@ -254,6 +272,10 @@ final class SettingsSelectionTests: XCTestCase {
         let before = model.titleFilterRows(.matches, of: travel).map(\.id)
 
         model.removeSelectedSource()
+        XCTAssertEqual(
+            model.editingConfig?.sources.map(\.id), ["travel"],
+            "the removal has to happen for this to mean anything"
+        )
 
         XCTAssertEqual(model.titleFilterRows(.matches, of: travel).map(\.id), before)
     }
