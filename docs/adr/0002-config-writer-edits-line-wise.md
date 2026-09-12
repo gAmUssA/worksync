@@ -23,8 +23,13 @@ lines are kept.
 to the intended value. If the line edit does not round-trip, the writer falls
 back to `serialize` — a full rewrite that loses comments and layout — and
 checks that too. Either way it refuses to overwrite the file if the result
-would not load back as written (`ConfigWriteError.roundTripFailed`). A `.bak`
-copy is taken first.
+would not load back as written (`ConfigWriteError.roundTripFailed`). Without a
+usable original parse, including an existing malformed file, it serializes the
+whole config directly and verifies that result.
+
+When the original text was readable, `save` attempts to replace `path + ".bak"`
+before writing. This backup is best-effort: both removal and copying use `try?`,
+and failure of either does not prevent the atomic config write.
 
 The outcome is reported (`ConfigWriteOutcome.preserved` vs `.reserialized`) so
 a silent full rewrite cannot pass as a comment-preserving save.
@@ -36,8 +41,14 @@ a silent full rewrite cannot pass as a comment-preserving save.
   has to understand arrays, quotes, and section layout well enough not to
   corrupt the file; when it does not, `verified` is the only backstop, and the
   cost of that backstop is losing every comment.
-- Wrapped / multiline arrays, exotic quoting, and any construct the line
-  walker does not understand force the fallback. That is acceptable data loss
-  only because it is reported.
+- Wrapped arrays and supported literal/basic quoting do not inherently force
+  fallback. `TomlDocument` handles these layouts; rewriting a wrapped array can
+  relocate its internal comments. If a line edit fails the equality check,
+  successful full serialization loses comments/layout and reports `.reserialized`.
+  Replacing an existing malformed original also reports `.reserialized`.
+- A successful save does not prove that a usable recovery backup exists. Backup
+  replacement can fail or leave no backup, so the reported recovery path may be
+  unavailable. Open issue `worksync-b2ke` asks whether a successful backup should
+  become a prerequisite; that is not the current behavior.
 - A writer that skipped the self-check could hand the next sync an unparseable
   file. That must not happen.

@@ -29,9 +29,9 @@ skips rather than failing a release that already published.
 
 ## Consequences
 
-- The job cannot run before the asset is public. A race where bump-tap
-  starts before the upload is visible will fail the curl; that is preferable
-  to hashing the wrong bytes.
+- `needs: release` gates the job on release completion, not independently
+  confirmed asset visibility. If the download is unavailable, `curl -f` fails
+  the step before the cask is edited. The workflow has no local-build fallback.
 - A local or CI-built tarball must never be substituted for the downloaded
   asset. Doing so would make the cask lie.
 - The no-downgrade guard means a late or retried older tag is a no-op, not a

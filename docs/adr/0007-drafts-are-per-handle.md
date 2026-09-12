@@ -19,15 +19,15 @@ A late setter from A writes A's slot, which the selected card is not reading.
 
 Drafts still do not outlive attention: `select` calls `removeAll` (except on
 rename, which keeps the same handle). `closeSettings` drops everything. A
-retired handle is refused by `setText(_:field:of:in:)` so a field built
+retired handle is refused by `setText(_:_:of:in:)` so a field built
 before a removal cannot store text against a dead source.
 
 ## Consequences
 
-- Typing into B no longer wipes A's slot. That wiping *was* the bug, even
-  though it looked like "the user moved on." The form still *shows* empty
-  add fields on the unselected card; a selection change still clears every
-  slot, so half-typed text does not reappear when the user comes back.
+- A late setter from A no longer wipes selected B's draft. Only the selected
+  source's card is rendered; the draft getter does not mask an unselected
+  handle's stored text. An ordinary selection change clears every slot, so
+  half-typed text does not reappear when the user comes back.
 - `remove(_:)` exists for a deleted source but the model currently relies on
   `select` → `removeAll`. That is enough today because delete always
   reselects. A later change that stops calling `removeAll` on delete would

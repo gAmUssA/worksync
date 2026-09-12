@@ -14,8 +14,9 @@ blocker should be written. Something has to win.
 Config order is the rule. `SyncPlanner.desiredAcrossSources`
 (`Sources/WorkSyncCore/MultiSource.swift`) walks `inputs` as listed, runs
 eligibility first, then inserts `EventIdentity` into a claimed set. The first
-source that would actually mirror the event keeps it; later sources drop it
-as a duplicate.
+source whose eligibility pass accepts the occurrence claims it; later sources
+drop it as a duplicate. Claiming precedes padding, coalescing, window filtering,
+and the separate conflict-skip pass.
 
 The settings list is therefore a reorderable `List`, and the config writer
 must preserve `[[source]]` order exactly — not alphabetize, not sort by id.
@@ -30,3 +31,6 @@ must preserve `[[source]]` order exactly — not alphabetize, not sort by id.
   order is load-bearing, not a layout preference.
 - Eligibility runs before the claim, so a source that filters an event out
   does not occupy the identity and block a later source from producing it.
+- Passing eligibility does not guarantee a blocker. If later window filtering
+  or conflict skipping discards the winner's block, the claim is not released
+  and a later source does not get a second opportunity.

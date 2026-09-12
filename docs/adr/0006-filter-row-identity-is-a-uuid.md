@@ -31,9 +31,10 @@ falls back to `TitleFilterRowID.position` — the old behaviour, kept so
 - `[String]` stays the config shape. The UUIDs live only in the editing
   session and die with `closeSettings`.
 - The positional fallback *is* the original bug for any list that has
-  entries and was not seeded. Today `openSettings` seeds every list
-  (including empty ones) and `addTitleFilter` calls `appended`, so that
-  path is not reached. A future writer of filter arrays that skips
+  entries and was not seeded. `openSettings` seeds the loaded lists, including
+  empty ones. A newly added source starts with empty lists, and `addTitleFilter`
+  calls `appended` as entries are added, so the current editor paths give
+  nonempty lists UUIDs. A future writer of filter arrays that skips
   `seed` / `appended` reintroduces a silent wrong-row write. The fallback
   is a `ForEach` safety net, not a degrade with a warning.
 - `seed` with a changed count remints every UUID. Live fields holding the

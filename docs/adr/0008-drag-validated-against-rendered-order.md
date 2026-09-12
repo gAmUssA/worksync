@@ -1,4 +1,4 @@
-# ADR-0008 — A drag is validated against the order it was drawn on
+# ADR-0008 — Validate move callbacks against captured rendered source order
 
 Status: accepted
 Date: 2026-09-12
@@ -27,13 +27,17 @@ framework's move, not a reimplementation.
 
 ## Consequences
 
-- A drop against a list that changed is a no-op, not a trap and not a wrong
-  reorder. Dedup order is not silently scrambled.
-- The snapshot is taken at **render**, not at drag start.
-  `SettingsView` closes over `rows` from the view body that installed
-  `onMove`. A re-render during the drag replaces that closure with one that
-  already matches `current`, while the offsets still describe the list at
-  drag start. The identity guard then passes and the stale offsets apply.
-  There is no `onDragStart` snapshot in the code.
+- A callback whose captured identity sequence differs from the current list
+  is rejected, even when its offsets remain in range. Matching sequences still
+  require valid offsets. This is the guarantee exercised by the pure guard
+  and stale-callback checks.
+- The snapshot is taken at **render**, not at drag start. There is no explicit
+  drag-start snapshot. Native SwiftUI behavior during an intervening render
+  was not exercised: it is not established whether the framework retains the
+  old callback, replaces it, rebases offsets, or cancels the drag. If it delivers
+  old offsets through a new callback whose snapshot matches the current list,
+  the identity guard cannot detect that mismatch. This is a conditional risk,
+  not a reproduced native drag defect or a guarantee that every changed-list
+  gesture is rejected.
 - Ignoring a drop is safer than guessing. It can surprise a user whose
   list changed under them; they can drag again.
