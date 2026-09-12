@@ -77,6 +77,9 @@ final class MenuBarModel {
     /// remembers which source it was typed for, so a half-typed entry cannot
     /// follow the user to a different one even if a path forgets to clear it.
     var titleFilterDrafts = TitleFilterDrafts()
+    /// Identities for the rows on screen, so an edit lands on the row it was
+    /// typed into rather than on whatever has shifted into its position.
+    private var titleFilterRowIDs = TitleFilterRowIDs()
 
     var isPaused: Bool {
         didSet {
@@ -471,6 +474,7 @@ extension MenuBarModel {
             return
         }
         settingsBlocked = nil
+        seedTitleFilterRowIDs()
         loadCalendarChoices()
         select(editingConfig?.sources.first?.id)
         saveError = nil
@@ -486,6 +490,7 @@ extension MenuBarModel {
         sourceIDDraft = nil
         renameError = nil
         titleFilterDrafts.removeAll()
+        titleFilterRowIDs.removeAll()
     }
 
     /// Account/calendar choices for the popups, from the same enumeration
@@ -551,6 +556,7 @@ extension MenuBarModel {
         guard let index = config.sources.firstIndex(where: { $0.id == selected }) else { return }
         config.sources.remove(at: index)
         sourceOrigins.removeValue(forKey: selected)
+        titleFilterRowIDs.removeSource(selected)
         editingConfig = config
         // Deliberately not committing first: the draft belongs to the row being
         // deleted, so applying it would rename a source on its way out.
@@ -658,6 +664,7 @@ extension MenuBarModel {
         // A rename is the same row under a new name, so what was typed into its
         // filter fields is still the user's — it travels with the source.
         titleFilterDrafts.rename(oldID, to: newID)
+        titleFilterRowIDs.renameSource(oldID, to: newID)
         select(newID, keepingFilterDrafts: true)
     }
 
@@ -696,22 +703,76 @@ extension MenuBarModel {
     /// Adds what is in the field's draft. Silent when the draft is not
     /// addable — the button that calls this is disabled in that state, and the
     /// reason is already on screen.
+    /// The rows to render, each carrying an identity that outlives its
+    /// position.
+    func titleFilterRows(_ field: TitleFilterField, of sourceID: String) -> [TitleFilterRow] {
+        titleFilterRowIDs.rows(
+            list(field, sourceID), entries: titleFilterEntries(field, of: sourceID)
+        )
+    }
+
     func addTitleFilter(_ field: TitleFilterField, to sourceID: String) {
         guard let sources = editingConfig?.sources,
               let updated = TitleFilterEntry.adding(
                   titleFilterDraft(field), to: field.keyPath, ofSourceWith: sourceID, in: sources
               ) else { return }
         editingConfig?.sources = updated
+        titleFilterRowIDs.appended(to: list(field, sourceID))
         titleFilterDrafts.clear(field.rawValue, of: selectedSourceID)
     }
 
     /// Rewrites one row as the user types in it.
-    func setTitleFilterEntry(_ text: String, _ field: TitleFilterField, of sourceID: String, at row: Int) {
+    ///
+    /// Addressed by row identity: a commit can arrive after its row moved, and
+    /// resolving by position would write it onto whatever shifted underneath.
+    func setTitleFilterEntry(
+        _ text: String, _ field: TitleFilterField, of sourceID: String, row id: TitleFilterRowID
+    ) {
         guard let sources = editingConfig?.sources,
+              let row = position(of: id, field, sourceID),
               let updated = TitleFilterEntry.setting(
                   text, at: row, in: field.keyPath, ofSourceWith: sourceID, in: sources
               ) else { return }
         editingConfig?.sources = updated
+    }
+
+    /// Why the row identified by `id` cannot be saved, or nil.
+    ///
+    /// Resolved by identity like every other row operation, so the caption a
+    /// row shows always describes that row.
+    func titleFilterRowMessage(
+        _ field: TitleFilterField, of sourceID: String, row id: TitleFilterRowID
+    ) -> String? {
+        let entries = titleFilterEntries(field, of: sourceID)
+        guard let row = position(of: id, field, sourceID), entries.indices.contains(row) else { return nil }
+        return TitleFilterEntry.message(
+            for: TitleFilterEntry.checkRow(entries[row], against: entries, excluding: row)
+        )
+    }
+
+    private func list(_ field: TitleFilterField, _ sourceID: String) -> TitleFilterRowIDs.List {
+        TitleFilterRowIDs.List(source: sourceID, field: field.rawValue)
+    }
+
+    private func position(
+        of id: TitleFilterRowID, _ field: TitleFilterField, _ sourceID: String
+    ) -> Int? {
+        titleFilterRowIDs.position(
+            of: id, in: list(field, sourceID), count: titleFilterEntries(field, of: sourceID).count
+        )
+    }
+
+    /// Gives every list on screen an identity per row. Idempotent, so calling
+    /// it again cannot re-key a row under a live text field.
+    private func seedTitleFilterRowIDs() {
+        guard let config = editingConfig else { return }
+        for source in config.sources {
+            for field in TitleFilterField.allCases {
+                titleFilterRowIDs.seed(
+                    list(field, source.id), count: source[keyPath: field.keyPath].count
+                )
+            }
+        }
     }
 
     /// Trims every entry, the way the add field already does.
@@ -730,12 +791,14 @@ extension MenuBarModel {
         editingConfig = config
     }
 
-    func removeTitleFilter(_ field: TitleFilterField, from sourceID: String, at row: Int) {
+    func removeTitleFilter(_ field: TitleFilterField, from sourceID: String, row id: TitleFilterRowID) {
         guard let sources = editingConfig?.sources,
+              let row = position(of: id, field, sourceID),
               let updated = TitleFilterEntry.removing(
                   at: row, from: field.keyPath, ofSourceWith: sourceID, in: sources
               ) else { return }
         editingConfig?.sources = updated
+        titleFilterRowIDs.removed(at: row, from: list(field, sourceID))
     }
 
     /// Why the title filters cannot be saved yet, or nil. Covers both a row
@@ -840,6 +903,16 @@ enum TitleFilterField: String, CaseIterable, Hashable {
         switch self {
         case .matches: "Empty: every event is mirrored."
         case .excludes: "Empty: nothing is excluded."
+        }
+    }
+
+    /// Names the list in a control's accessibility label. Both lists have a
+    /// `+` and a row of `−` buttons, and "Add entry" on each says nothing about
+    /// which list is being added to.
+    var accessibilityName: String {
+        switch self {
+        case .matches: "only-mirror list"
+        case .excludes: "never-mirror list"
         }
     }
 

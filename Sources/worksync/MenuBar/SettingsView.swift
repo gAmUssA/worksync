@@ -313,32 +313,32 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(field.title).font(.callout)
 
-            ForEach(entries.indices, id: \.self) { row in
+            // Rows carry their own identity rather than their position: a
+            // commit can arrive after its row moved, and by position it would
+            // land on whatever shifted underneath — silently, since the index
+            // is still in range.
+            ForEach(model.titleFilterRows(field, of: sourceID)) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        // Both halves resolve safely: a row can vanish while
-                        // its field is still resigning focus, and the setter
-                        // used to subscript the index the row was built with.
                         TextField("", text: Binding(
-                            get: { row < entries.count ? entries[row] : "" },
-                            set: { model.setTitleFilterEntry($0, field, of: sourceID, at: row) }
+                            get: { row.text },
+                            set: { model.setTitleFilterEntry($0, field, of: sourceID, row: row.id) }
                         ))
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Entry in the \(field.accessibilityName)")
 
                         Button {
-                            model.removeTitleFilter(field, from: sourceID, at: row)
+                            model.removeTitleFilter(field, from: sourceID, row: row.id)
                         } label: {
                             Image(systemName: "minus")
                         }
-                        .accessibilityLabel("Remove entry")
+                        .accessibilityLabel(removeLabel(for: row.text, in: field))
                     }
                     // Live, because a row can be emptied in place and the user
                     // should see why Save went away. `checkRow`, not `check`:
                     // an emptied row is an error, where an empty add field is
                     // just an add field nobody has typed into yet.
-                    if let message = TitleFilterEntry.message(
-                        for: TitleFilterEntry.checkRow(entries[row], against: entries, excluding: row)
-                    ) {
+                    if let message = model.titleFilterRowMessage(field, of: sourceID, row: row.id) {
                         Text(message).font(.caption).foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -359,7 +359,7 @@ struct SettingsView: View {
                     Image(systemName: "plus")
                 }
                 .disabled(!isAddable(model.titleFilterDraftCheck(field, of: sourceID)))
-                .accessibilityLabel("Add entry")
+                .accessibilityLabel("Add to the \(field.accessibilityName)")
             }
 
             if let message = TitleFilterEntry.message(
@@ -371,6 +371,15 @@ struct SettingsView: View {
                 Text(field.emptyMeaning).font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Names the entry as well as its list, so a screen reader user knows which
+    /// row's remove button they are on, not just which list.
+    private func removeLabel(for text: String, in field: TitleFilterField) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            ? "Remove the empty entry from the \(field.accessibilityName)"
+            : "Remove “\(trimmed)” from the \(field.accessibilityName)"
     }
 
     private func isAddable(_ check: TitleFilterEntry.Check) -> Bool {
