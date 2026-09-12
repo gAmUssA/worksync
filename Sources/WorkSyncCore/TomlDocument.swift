@@ -68,8 +68,8 @@ struct TomlDocument {
 
     // MARK: Line-level editing
 
-    /// Rewrites `key`'s value inside `section`, keeping any trailing comment on
-    /// the line that ends the value. Appends the key if it is not present.
+    /// Rewrites `key`'s value inside `section`, keeping every comment the old
+    /// value's lines carried. Appends the key if it is not present.
     ///
     /// A hand-wrapped array spans several lines, so the whole span is replaced.
     /// Rewriting only the line the key sits on would leave the continuation
@@ -78,14 +78,12 @@ struct TomlDocument {
     static func setValue(_ value: String, forKey key: String, in section: inout Section) {
         for index in section.body.indices {
             guard keyOnLine(section.body[index]) == key else { continue }
-            let indent = section.body[index].prefix { $0 == " " || $0 == "\t" }
+            let indent = String(section.body[index].prefix { $0 == " " || $0 == "\t" })
             if let end = arrayEnd(startingAt: index, in: section.body) {
-                // The comment kept is the one after the closing bracket, where
-                // a wrapped array's explanation conventionally sits. Comments
-                // on the opening line or between the elements describe the old
-                // elements, which are the thing being replaced.
-                let comment = scan(section.body[end]).comment
-                section.body.replaceSubrange(index ... end, with: ["\(indent)\(key) = \(value)\(comment)"])
+                let replacement = rewritten(
+                    value, forKey: key, replacing: Array(section.body[index ... end]), indent: indent
+                )
+                section.body.replaceSubrange(index ... end, with: replacement)
             } else {
                 let (_, comment) = splitValueAndComment(section.body[index])
                 section.body[index] = "\(indent)\(key) = \(value)\(comment)"
@@ -110,7 +108,13 @@ struct TomlDocument {
     static func arrayEnd(startingAt index: Int, in body: [String]) -> Int? {
         let line = body[index]
         guard let equals = line.firstIndex(of: "=") else { return nil }
-        var depth = scan(String(line[line.index(after: equals)...])).depth
+        let value = String(line[line.index(after: equals)...])
+        // A bracket has to actually open the value. Without this a scalar whose
+        // text merely contains one — `title_template = "[draft]"` mid-string,
+        // or a stray bracket in a literal — would look like an array opener and
+        // the search for its "closing" bracket would run into later keys.
+        guard value.trimmingCharacters(in: .whitespaces).hasPrefix("[") else { return nil }
+        var depth = scan(value).depth
         guard depth > 0 else { return nil }
 
         var cursor = index + 1
@@ -127,23 +131,36 @@ struct TomlDocument {
     }
 
     /// How much `text` changes the bracket depth before its trailing comment,
-    /// and that comment. Brackets and `#` inside a quoted string do not count.
+    /// and that comment with the whitespace that lines it up.
+    ///
+    /// Both TOML string forms are tracked: a basic string, where a backslash
+    /// escapes the next character, and a literal string, where a single quote
+    /// delimits and nothing escapes. Brackets and `#` inside either are text,
+    /// not syntax — `title_matches = ['[']` is a one-element array, and reading
+    /// its bracket as an opener would make the search for a closing one run past
+    /// the key and swallow whatever it found on the way.
+    ///
+    /// Triple-quoted strings are not tracked: a value spanning lines that way
+    /// has never round-tripped through this writer.
     private static func scan(_ text: String) -> (depth: Int, comment: String) {
         var depth = 0
-        var inString = false
+        var quote: Character?
         var escaped = false
         var index = text.startIndex
         while index < text.endIndex {
             let character = text[index]
-            if escaped {
-                escaped = false
-            } else if character == "\\", inString {
-                escaped = true
-            } else if character == "\"" {
-                inString.toggle()
-            } else if !inString {
+            if let open = quote {
+                if escaped {
+                    escaped = false
+                } else if open == "\"", character == "\\" {
+                    escaped = true
+                } else if character == open {
+                    quote = nil
+                }
+            } else {
                 switch character {
-                case "#": return (depth, String(text[index...]))
+                case "\"", "'": quote = character
+                case "#": return (depth, String(text[commentStart(at: index, in: text)...]))
                 case "[": depth += 1
                 case "]": depth -= 1
                 default: break
@@ -152,6 +169,119 @@ struct TomlDocument {
             index = text.index(after: index)
         }
         return (depth, "")
+    }
+
+    /// Where a comment's run of leading whitespace begins, so rewriting the
+    /// value in front of it leaves the user's alignment alone.
+    private static func commentStart(at hash: String.Index, in text: String) -> String.Index {
+        var start = hash
+        while start > text.startIndex {
+            let previous = text.index(before: start)
+            guard text[previous] == " " || text[previous] == "\t" else { break }
+            start = previous
+        }
+        return start
+    }
+
+    /// The lines that replace a wrapped array's span.
+    ///
+    /// Every comment in the span survives. One after the closing bracket stays
+    /// there; one on the opening line stays there; standalone and trailing
+    /// comments between the elements move inside the new array, in the order
+    /// they were written. The elements they annotated are the thing being
+    /// replaced, so there is nothing left for them to sit beside — but deleting
+    /// the text is the data loss this writer exists to prevent (SPEC §4.3), and
+    /// a rewrite that still parses would report it as a clean save.
+    ///
+    /// The array stays wrapped whenever those interior comments exist, and
+    /// collapses to one line when there are none.
+    private static func rewritten(
+        _ value: String,
+        forKey key: String,
+        replacing span: [String],
+        indent: String
+    ) -> [String] {
+        let opening = span[0].firstIndex(of: "=").map {
+            scan(String(span[0][span[0].index(after: $0)...])).comment
+        } ?? ""
+        let closing = scan(span[span.count - 1]).comment
+        let interior = span.dropFirst().dropLast()
+            .map { scan($0).comment.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        let collapsed = "\(indent)\(key) = \(value)\(opening)\(closing)"
+        guard !interior.isEmpty else {
+            // Nothing between the brackets to keep: one line reads better, and
+            // it is what every array the writer itself produced looks like.
+            return [collapsed]
+        }
+        guard let elements = arrayElements(of: value) else {
+            // Not an array literal after all, so there is no inside to put the
+            // comments back into. Above the key is the one place left that
+            // keeps them next to what they describe.
+            return interior.map { indent + $0 } + [collapsed]
+        }
+
+        let inner = span.dropFirst().dropLast().first {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        let elementIndent = inner.map { String($0.prefix { $0 == " " || $0 == "\t" }) } ?? indent + "  "
+
+        var lines = ["\(indent)\(key) = [\(opening)"]
+        lines += interior.map { elementIndent + $0 }
+        lines += elements.map { "\(elementIndent)\($0)," }
+        lines.append("\(indent)]\(closing)")
+        return lines
+    }
+
+    /// The top-level elements of an array literal this type rendered, or nil
+    /// for anything that is not one.
+    private static func arrayElements(of value: String) -> [String]? {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("["), trimmed.hasSuffix("]"), trimmed.count >= 2 else { return nil }
+
+        var elements: [String] = []
+        var current = ""
+        var quote: Character?
+        var escaped = false
+        var depth = 0
+        for character in trimmed.dropFirst().dropLast() {
+            if let open = quote {
+                current.append(character)
+                if escaped {
+                    escaped = false
+                } else if open == "\"", character == "\\" {
+                    escaped = true
+                } else if character == open {
+                    quote = nil
+                }
+                continue
+            }
+            switch character {
+            case "\"", "'":
+                quote = character
+                current.append(character)
+            case "[":
+                depth += 1
+                current.append(character)
+            case "]":
+                depth -= 1
+                current.append(character)
+            case "," where depth == 0:
+                let element = current.trimmingCharacters(in: .whitespaces)
+                if !element.isEmpty {
+                    elements.append(element)
+                }
+                current = ""
+            default:
+                current.append(character)
+            }
+        }
+        let last = current.trimmingCharacters(in: .whitespaces)
+        if !last.isEmpty {
+            elements.append(last)
+        }
+        return elements
     }
 
     static func value(forKey key: String, in section: Section) -> String? {
@@ -169,29 +299,16 @@ struct TomlDocument {
         return String(trimmed[..<equals]).trimmingCharacters(in: .whitespaces)
     }
 
-    /// Splits a line at its trailing comment, ignoring `#` inside quotes — a
-    /// title template of `"Busy #1"` must not be truncated.
+    /// Splits a line at its trailing comment, ignoring `#` inside either string
+    /// form — a title template of `"Busy #1"`, in basic or literal quotes, must
+    /// not be truncated. The comment keeps the whitespace in front of it, so a rewrite
+    /// of the value leaves the user's alignment intact.
     static func splitValueAndComment(_ line: String) -> (value: String, comment: String) {
         guard let equals = line.firstIndex(of: "=") else { return (line, "") }
         let after = line.index(after: equals)
-
-        var inString = false
-        var escaped = false
-        var index = after
-        while index < line.endIndex {
-            let character = line[index]
-            if escaped {
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                inString.toggle()
-            } else if character == "#", !inString {
-                return (String(line[after ..< index]), String(line[index...]))
-            }
-            index = line.index(after: index)
-        }
-        return (String(line[after...]), "")
+        let rest = String(line[after...])
+        let comment = scan(rest).comment
+        return (String(rest.dropLast(comment.count)), comment)
     }
 
     private static func isHeader(_ line: String) -> Bool {
