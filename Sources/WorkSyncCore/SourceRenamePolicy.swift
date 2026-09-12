@@ -4,9 +4,10 @@ import Foundation
 ///
 /// Pure and tested rather than inline in the settings screen: getting this
 /// wrong is silently destructive in one direction (renaming a live source
-/// orphans every event already written under the old id, reachable afterwards
-/// only through `purge --source`) and merely annoying in the other (warning
-/// about a source that has never been saved, so nothing can exist under it).
+/// strands the events already written under the old id: the next sync deletes
+/// and recreates the ones it fetches, and `purge --source` is how the rest are
+/// reached) and merely annoying in the other (warning about a source that has
+/// never been saved, so nothing can exist under it).
 public enum SourceRenamePolicy {
     public static func needsWarning(
         renaming oldID: String,

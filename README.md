@@ -154,11 +154,13 @@ wrong and hard to notice afterwards:
 the first one listed provides the title, padding, and target calendar.
 Reordering the blocks changes that silently.
 
-**A source `id` is permanent.** It is embedded in every event WorkSync creates,
-which is how it recognizes its own work later. Renaming one orphans every event
-already created under the old name — they will never be updated or cleaned up
-by a normal sync. `worksync purge --source <old-id>` is the only way to reach
-them afterwards.
+**Renaming a source changes blocker identity.** The `id` is embedded in each
+marker. Normal sync schedules unmatched old-id blockers for deletion when they
+are fetched from current target calendars within the sync window. Blockers
+outside that scope can remain behind. `worksync purge --source <old-id>` previews
+leftovers across all calendars within ±365 days; add `--yes` to delete them.
+See [ADR-0010](docs/adr/0010-source-id-in-marker-orphans-on-rename.md) for the scope
+and failure conditions.
 
 **Colors come from calendars, not events.** EventKit cannot set a per-event
 color, so pointing different sources at different `target_calendar`s is the
@@ -350,11 +352,11 @@ calling a change done, verify by hand:
 
 ## Design
 
-[`SPEC.md`](SPEC.md) is the full specification, including the reasoning behind
-the parts that look arbitrary: why identity is keyed on
-`(externalIdentifier, occurrenceDate)`, why the sync window filters rather than
-truncates, why the marker lives in event notes rather than the URL field, and
-why the app is a bundle rather than a bare binary.
+The [architecture decision records](docs/adr/README.md) explain recorded design
+choices and their tradeoffs, including marker storage, source identity, and
+config writing. [`SPEC.md`](SPEC.md) preserves the original design intent and
+domain description; it is not the authority on current behavior. Read the code
+and the relevant ADRs for implemented decisions.
 
 ## License
 
