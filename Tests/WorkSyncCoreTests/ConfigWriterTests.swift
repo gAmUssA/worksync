@@ -127,6 +127,50 @@ final class ConfigWriterTests: XCTestCase {
         XCTAssertEqual(try ConfigLoader.parse(text), updated)
     }
 
+    // MARK: Source ID string forms
+
+    private func assertSourceIDPreserved(_ rawID: String, expectedID: String) throws {
+        let fixture = """
+        [target]
+        account = "Work"
+        calendar = "Calendar"
+
+        [[source]]
+        # This block is carefully documented.
+        id = \(rawID)  # stable source identity
+        account = "iCloud"
+        calendar = "Personal"
+
+        # Colleagues see only this placeholder.
+        title_template = "Busy"
+        """
+        let (text, outcome, expected) = try saveFixture(fixture) {
+            $0.sources[0].titleTemplate = "Unavailable"
+        }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(expected.sources[0].id, expectedID)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertEqual(text, fixture.replacingOccurrences(
+            of: "title_template = \"Busy\"", with: "title_template = \"Unavailable\""
+        ), "only the edited field should change; ID spelling, comments and layout must survive")
+    }
+
+    func testLiteralSourceIDPreservesBlockWhenAnotherFieldChanges() throws {
+        try assertSourceIDPreserved("'personal'", expectedID: "personal")
+    }
+
+    func testBasicSourceIDPreservesBlockWhenAnotherFieldChanges() throws {
+        try assertSourceIDPreserved(#""personal""#, expectedID: "personal")
+    }
+
+    func testLiteralSourceIDPreservesBackslashesQuotesAndHash() throws {
+        try assertSourceIDPreserved(##"'a\nb\\c\"#team'"##, expectedID: ##"a\nb\\c\"#team"##)
+    }
+
+    func testBasicSourceIDDecodesUnicodeEscapeForBlockMatching() throws {
+        try assertSourceIDPreserved(#""\u0070ersonal""#, expectedID: "personal")
+    }
+
     // MARK: Hand-wrapped arrays
 
     /// A user who lists more than two or three entries wraps the array, and

@@ -1,4 +1,5 @@
 import Foundation
+import TOMLKit
 
 public enum ConfigWriteError: Error, LocalizedError, Equatable {
     case roundTripFailed(String)
@@ -180,8 +181,8 @@ public enum ConfigWriter {
         var blocksByID: [String: TomlDocument.Section] = [:]
         for index in blockIndices {
             let section = document.sections[index]
-            if let raw = TomlDocument.value(forKey: "id", in: section) {
-                blocksByID[unquote(raw)] = section
+            if let raw = TomlDocument.value(forKey: "id", in: section), let id = unquote(raw) {
+                blocksByID[id] = section
             }
         }
         let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
@@ -237,14 +238,12 @@ public enum ConfigWriter {
         return section
     }
 
-    private static func unquote(_ raw: String) -> String {
-        var value = raw.trimmingCharacters(in: .whitespaces)
-        if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
-            value = String(value.dropFirst().dropLast())
-        }
-        return value
-            .replacingOccurrences(of: "\\\"", with: "\"")
-            .replacingOccurrences(of: "\\\\", with: "\\")
+    /// Decode only the scalar used to match a block; retain its original text.
+    /// TOML literal strings preserve backslashes, while basic strings decode
+    /// escapes (including Unicode). Use the loader's parser for both forms.
+    private static func unquote(_ raw: String) -> String? {
+        let table = try? TOMLTable(string: "id = \(raw)")
+        return table?["id"]?.string
     }
 
     // MARK: Field diffs
