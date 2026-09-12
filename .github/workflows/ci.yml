@@ -196,13 +196,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release
     runs-on: ubuntu-latest
-    # Every release writes the same branch of the same tap. Two tags pushed
-    # close together would otherwise check out the same HEAD and the second
-    # push would be rejected, leaving the newer release published with a stale
-    # cask. cancel-in-progress stays false: cancelling would drop a bump whose
-    # release already succeeded.
+    # Serialize reruns of the same tag without letting another release replace
+    # its pending bump. Different tags can run concurrently; the version guards
+    # and push retry below handle updates to the shared tap branch.
     concurrency:
-      group: bump-homebrew-tap
+      group: bump-homebrew-tap-${{ github.ref_name }}
       cancel-in-progress: false
     steps:
       # Same shape as the signing-secret gate above: do the real thing when the
@@ -252,10 +250,9 @@ jobs:
 
           CASK=tap/Casks/worksync.rb
 
-          # Before touching the file, not only after a rejected push. The
-          # concurrency lock means a queued run checks out AFTER the previous
-          # one pushed, so an out-of-order older tag would see the newer cask,
-          # rewrite it downward and push fast-forward with nothing to reject.
+          # Before touching the file, not only after a rejected push. An older
+          # tag can check out after a newer bump has landed and otherwise push
+          # a downgrade fast-forward with nothing to reject.
           CURRENT=$(sed -nE 's|^  version "([^"]*)"$|\1|p' "$CASK")
           NEWEST=$(printf '%s\n%s\n' "$VERSION" "$CURRENT" | sort -V | tail -1)
           if [ "$CURRENT" != "$VERSION" ] && [ "$NEWEST" = "$CURRENT" ]; then
@@ -293,8 +290,8 @@ jobs:
           git add Casks/worksync.rb
           git commit -m "WorkSync cask ${VERSION}"
 
-          # The concurrency group serializes this repo's own runs; the retry
-          # additionally covers anyone pushing to the tap by hand.
+          # Same-tag reruns are serialized. Retry rejected pushes from other
+          # tags or anyone updating the tap by hand.
           for attempt in 1 2 3; do
             if git push; then
               echo "Pushed cask ${VERSION} on attempt ${attempt}."
