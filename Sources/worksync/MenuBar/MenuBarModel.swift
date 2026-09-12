@@ -73,6 +73,10 @@ final class MenuBarModel {
     /// Ids that exist in the saved file, so a rename of a brand-new source
     /// does not warn about orphaning events that cannot exist yet.
     var savedSourceIDs: Set<String> = []
+    /// What is typed into each title-filter list's "add" field, held here and
+    /// cleared on a selection change so a half-typed entry cannot follow the
+    /// user to a different source.
+    var titleFilterDrafts: [TitleFilterField: String] = [:]
 
     var isPaused: Bool {
         didSet {
@@ -467,6 +471,7 @@ extension MenuBarModel {
             return
         }
         settingsBlocked = nil
+        titleFilterDrafts = [:]
         loadCalendarChoices()
         selectedSourceID = editingConfig?.sources.first?.id
         sourceIDDraft = selectedSourceID.map(SourceIDDraft.init(id:))
@@ -483,6 +488,7 @@ extension MenuBarModel {
         pendingRename = nil
         sourceIDDraft = nil
         renameError = nil
+        titleFilterDrafts = [:]
     }
 
     /// Account/calendar choices for the popups, from the same enumeration
@@ -578,6 +584,7 @@ extension MenuBarModel {
         }
         renameError = nil
         sourceIDDraft = sourceID.map(SourceIDDraft.init(id:))
+        titleFilterDrafts = [:]
     }
 
     /// Judges the accumulated draft text once, on commit — Enter, leaving the
@@ -633,6 +640,64 @@ extension MenuBarModel {
         sourceIDDraft?.markCommitted(newID)
     }
 
+    // MARK: Title filters
+
+    func titleFilterEntries(_ field: TitleFilterField, ofSourceAt index: Int) -> [String] {
+        editingConfig?.sources[index][keyPath: field.keyPath] ?? []
+    }
+
+    func titleFilterDraft(_ field: TitleFilterField) -> String {
+        titleFilterDrafts[field] ?? ""
+    }
+
+    func setTitleFilterDraft(_ field: TitleFilterField, to text: String) {
+        titleFilterDrafts[field] = text
+    }
+
+    func titleFilterDraftCheck(_ field: TitleFilterField, ofSourceAt index: Int) -> TitleFilterEntry.Check {
+        TitleFilterEntry.check(titleFilterDraft(field), against: titleFilterEntries(field, ofSourceAt: index))
+    }
+
+    /// Adds what is in the field's draft. Silent when the draft is not
+    /// addable — the button that calls this is disabled in that state, and the
+    /// reason is already on screen.
+    func addTitleFilter(_ field: TitleFilterField, toSourceAt index: Int) {
+        guard let entries = TitleFilterEntry.adding(
+            titleFilterDraft(field), to: titleFilterEntries(field, ofSourceAt: index)
+        ) else { return }
+        editingConfig?.sources[index][keyPath: field.keyPath] = entries
+        titleFilterDrafts[field] = ""
+    }
+
+    func removeTitleFilter(_ field: TitleFilterField, fromSourceAt index: Int, at row: Int) {
+        guard var entries = editingConfig?.sources[index][keyPath: field.keyPath],
+              entries.indices.contains(row) else { return }
+        entries.remove(at: row)
+        editingConfig?.sources[index][keyPath: field.keyPath] = entries
+    }
+
+    /// Why the title filters cannot be saved yet, or nil. Covers both a row
+    /// edited to blank in place and a draft typed but never added: dropping
+    /// either one silently at save time is the failure this guards.
+    var titleFilterProblem: String? {
+        guard let config = editingConfig else { return nil }
+        for source in config.sources {
+            for field in TitleFilterField.allCases {
+                if let problem = TitleFilterEntry.problem(in: source[keyPath: field.keyPath]) {
+                    return "\(field.errorLabel) for “\(source.id)”: \(problem)"
+                }
+            }
+        }
+        guard let selected = selectedSourceID,
+              let index = config.sources.firstIndex(where: { $0.id == selected }) else { return nil }
+        for field in TitleFilterField.allCases {
+            if let message = TitleFilterEntry.message(for: titleFilterDraftCheck(field, ofSourceAt: index)) {
+                return "\(field.errorLabel): \(message)"
+            }
+        }
+        return nil
+    }
+
     // MARK: Saving
 
     /// Writes through the same writer everything else uses — comment
@@ -647,6 +712,23 @@ extension MenuBarModel {
         // A refused id or an open warning has to be resolved first, otherwise
         // saving writes the old id while the field still shows the new one.
         guard renameError == nil, pendingRename == nil else { return }
+
+        // Same commit point for the list editors: an entry typed but never
+        // added would otherwise vanish with the save that looked like it
+        // included it.
+        if let selected = selectedSourceID,
+           let index = editingConfig?.sources.firstIndex(where: { $0.id == selected }) {
+            for field in TitleFilterField.allCases {
+                addTitleFilter(field, toSourceAt: index)
+            }
+        }
+        // Never reachable through the form, which disables Save on a problem —
+        // but the writer's validation would name a config field rather than the
+        // row that caused it, so the readable message is produced here.
+        if let problem = titleFilterProblem {
+            saveError = problem
+            return
+        }
 
         guard let config = editingConfig else { return }
         do {
@@ -666,6 +748,50 @@ extension MenuBarModel {
             saveError = error.localizedDescription
         }
         refreshState()
+    }
+}
+
+/// Which of a source's two title-filter lists a control is editing.
+enum TitleFilterField: String, CaseIterable, Hashable {
+    case matches
+    case excludes
+
+    var keyPath: WritableKeyPath<SourceConfig, [String]> {
+        switch self {
+        case .matches: \.titleMatches
+        case .excludes: \.titleExcludes
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .matches: "Only mirror titles containing"
+        case .excludes: "Never mirror titles containing"
+        }
+    }
+
+    /// What an empty list means, which is the opposite for the two of them and
+    /// is exactly what a user cannot guess from the label.
+    var emptyMeaning: String {
+        switch self {
+        case .matches: "Empty: every event is mirrored."
+        case .excludes: "Empty: nothing is excluded."
+        }
+    }
+
+    /// Names the list in a message that appears away from it, in the footer.
+    var errorLabel: String {
+        switch self {
+        case .matches: "Only-mirror list"
+        case .excludes: "Never-mirror list"
+        }
+    }
+
+    var placeholder: String {
+        switch self {
+        case .matches: "1:1"
+        case .excludes: "tentative"
+        }
     }
 }
 

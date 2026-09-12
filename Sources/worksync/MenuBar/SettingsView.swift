@@ -282,16 +282,105 @@ struct SettingsView: View {
                     get: { source.availability },
                     set: { model.editingConfig?.sources[index].availability = $0 }
                 ), options: Availability.allCases, label: \.rawValue)
+
+                Divider()
+
+                // The one place a user is likely to assume the wrong thing:
+                // these read the source event's title, and nothing about them
+                // changes what a blocker is called (SPEC §7).
+                Text("A title is only read to decide what to mirror. Blockers are still called what “Shown as” says.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                titleFilterEditor(.matches, sourceIndex: index, entries: source.titleMatches)
+                titleFilterEditor(.excludes, sourceIndex: index, entries: source.titleExcludes)
             }
         }
+    }
+
+    /// One list per field, a row per entry — never a comma-joined text field,
+    /// because a calendar title can contain a comma.
+    ///
+    /// Blank and duplicate entries are refused in front of the field rather
+    /// than at save: `ConfigLoader.validate` throws on a blank one, and that
+    /// error names a config key at a moment far away from the keystroke.
+    private func titleFilterEditor(
+        _ field: TitleFilterField,
+        sourceIndex index: Int,
+        entries: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(field.title).font(.callout)
+
+            ForEach(entries.indices, id: \.self) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        TextField(field.placeholder, text: Binding(
+                            get: { row < entries.count ? entries[row] : "" },
+                            set: { model.editingConfig?.sources[index][keyPath: field.keyPath][row] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+
+                        Button {
+                            model.removeTitleFilter(field, fromSourceAt: index, at: row)
+                        } label: {
+                            Image(systemName: "minus")
+                        }
+                        .accessibilityLabel("Remove entry")
+                    }
+                    // Live, because a row can be emptied in place and the user
+                    // should see why Save went away.
+                    if let message = TitleFilterEntry.message(
+                        for: TitleFilterEntry.check(entries[row], against: entries, excluding: row)
+                    ) {
+                        Text(message).font(.caption).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                TextField(field.placeholder, text: Binding(
+                    get: { model.titleFilterDraft(field) },
+                    set: { model.setTitleFilterDraft(field, to: $0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { model.addTitleFilter(field, toSourceAt: index) }
+
+                Button {
+                    model.addTitleFilter(field, toSourceAt: index)
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(!isAddable(model.titleFilterDraftCheck(field, ofSourceAt: index)))
+                .accessibilityLabel("Add entry")
+            }
+
+            if let message = TitleFilterEntry.message(
+                for: model.titleFilterDraftCheck(field, ofSourceAt: index)
+            ) {
+                Text(message).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if entries.isEmpty {
+                Text(field.emptyMeaning).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func isAddable(_ check: TitleFilterEntry.Check) -> Bool {
+        if case .valid = check {
+            return true
+        }
+        return false
     }
 
     // MARK: Footer
 
     private var footer: some View {
         HStack {
-            if let saveError = model.saveError {
-                Text(saveError)
+            if let message = model.saveError ?? model.titleFilterProblem {
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)
                     .lineLimit(2)
@@ -302,7 +391,7 @@ struct SettingsView: View {
             Button("Save") { model.saveSettings() }
                 .glassButton()
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.editingConfig == nil)
+                .disabled(model.editingConfig == nil || model.titleFilterProblem != nil)
         }
         .padding(.horizontal, Theme.padding)
         .frame(height: Theme.barHeight)
