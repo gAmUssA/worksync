@@ -22,6 +22,10 @@ private struct Editor {
     var rowIDs = TitleFilterRowIDs()
     var nameField = SourceNameDraft()
     var renameError: String?
+    /// The orphan-warning alert, held the way the model holds it — round 9's
+    /// harness returned `.awaitingConfirmation` without storing anything, so its
+    /// test judged a dirty draft twice rather than an open alert.
+    var pendingRename: (source: SourceHandle, to: String)?
     /// Ids already on disk, so a rename of a saved source needs confirming.
     var savedSourceIDs: Set<String> = []
 
@@ -60,7 +64,7 @@ private struct Editor {
     /// `MenuBarModel.select`, which now stops on a refusal rather than moving
     /// past it.
     mutating func select(_ handle: SourceHandle?, keepingDrafts: Bool = false, committing: Bool = false) {
-        if committing, nameField.isDirty, commit().blocksAction {
+        if committing, commit().blocksAction {
             selected = nameField.pending?.handle
             return
         }
@@ -103,6 +107,10 @@ private struct Editor {
     /// `MenuBarModel.commitSourceIDDraft` — the whole of it, including what it
     /// now reports back.
     mutating func commit() -> SourceNameCommit {
+        // An open confirmation outranks the field's current text.
+        if pendingRename != nil {
+            return .awaitingConfirmation
+        }
         guard let pending = nameField.pending,
               let source = handles.resolve(pending.handle) else { return .settled }
         let others = config.sources.map(\.id).filter { $0 != source.id }
@@ -119,8 +127,9 @@ private struct Editor {
             renameError = nil
             rename(pending.handle, to: newID)
             return .renamed(newID)
-        case .confirm:
+        case let .confirm(_, to):
             renameError = nil
+            pendingRename = (pending.handle, to)
             return .awaitingConfirmation
         }
     }
@@ -131,9 +140,23 @@ private struct Editor {
         _ = commit()
     }
 
-    /// `MenuBarModel.addSource`, which now stops on a refusal.
+    /// `MenuBarModel.confirmPendingRename`
+    mutating func confirmRename() {
+        guard let pending = pendingRename else { return }
+        pendingRename = nil
+        rename(pending.source, to: pending.to)
+    }
+
+    /// `MenuBarModel.cancelPendingRename`
+    mutating func cancelRename() {
+        pendingRename = nil
+        nameField.revert()
+    }
+
+    /// `MenuBarModel.addSource`, which stops on a refusal or an open alert
+    /// whatever the field currently says.
     mutating func addSource() {
-        if nameField.isDirty, commit().blocksAction {
+        if commit().blocksAction {
             return
         }
         let added = SourceConfig(id: "source-2", account: "iCloud", calendar: "C")
@@ -177,6 +200,14 @@ final class SettingsSelectionTests: XCTestCase {
 
     private func editor() throws -> Editor {
         try Editor(ConfigLoader.parse(Self.fixture))
+    }
+
+    /// Both sources already on disk, so renaming one orphans its events and has
+    /// to be confirmed.
+    private func saved() throws -> Editor {
+        var editor = try Editor(ConfigLoader.parse(Self.fixture))
+        editor.savedSourceIDs = ["personal", "travel"]
+        return editor
     }
 
     // MARK: The detail card follows the selection
@@ -400,25 +431,85 @@ final class SettingsSelectionTests: XCTestCase {
         XCTAssertNil(editor.renameError)
     }
 
+    // MARK: An open confirmation
+
     /// A rename that orphans events opens a confirmation. Whatever asked for the
     /// commit stops too — the alert names one source, and anything that followed
     /// would happen behind it.
-    func testAnOpenConfirmationAlsoStopsTheAction() throws {
-        var editor = try editor()
-        editor.savedSourceIDs = ["personal", "travel"]
+    func testAnOpenConfirmationStopsTheAction() throws {
+        var editor = try saved()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
+
+        editor.type(name: "home", into: personal)
+        XCTAssertEqual(editor.commit(), .awaitingConfirmation)
+        XCTAssertNotNil(editor.pendingRename)
+
+        editor.select(travel, committing: true)
+        XCTAssertEqual(editor.selected, personal, "the selection waits for the answer")
+
+        editor.addSource()
+        XCTAssertEqual(editor.config.sources.count, 2, "and so does the add")
+    }
+
+    /// The defect: the block was reached only when the field was dirty, so a
+    /// retained setter putting the original name back left the alert open and
+    /// the guard asleep.
+    func testAnOpenConfirmationStillBlocksAfterTheNameIsRestored() throws {
+        var editor = try saved()
         let personal = try XCTUnwrap(editor.handle("personal"))
         let travel = try XCTUnwrap(editor.handle("travel"))
 
         editor.type(name: "home", into: personal)
         XCTAssertEqual(editor.commit(), .awaitingConfirmation)
 
-        editor.type(name: "home", into: personal)
+        // A retained setter for the same live source restores the old name. The
+        // field is clean again; the alert has not been answered.
+        editor.type(name: "personal", into: personal)
+        XCTAssertFalse(editor.nameField.isDirty, "the field agrees with the config again")
+        XCTAssertNotNil(editor.pendingRename, "but the alert is still on screen")
+
+        XCTAssertEqual(editor.commit(), .awaitingConfirmation, "the commit must report the alert, not the text")
+
+        editor.addSource()
+        XCTAssertEqual(editor.config.sources.count, 2, "no source may be added behind it")
+
         editor.select(travel, committing: true)
-        XCTAssertEqual(editor.selected, personal, "the selection waits for the answer")
+        XCTAssertEqual(editor.selected, personal, "and the selection may not move")
+    }
+
+    func testCancellingTheConfirmationLetsTheActionProceed() throws {
+        var editor = try saved()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+        let travel = try XCTUnwrap(editor.handle("travel"))
 
         editor.type(name: "home", into: personal)
+        XCTAssertEqual(editor.commit(), .awaitingConfirmation)
+
+        editor.cancelRename()
+        XCTAssertNil(editor.pendingRename)
+        XCTAssertEqual(editor.name(of: personal), "personal", "cancelling puts the old name back")
+
+        editor.select(travel, committing: true)
+        XCTAssertEqual(editor.selected, travel, "the move goes through")
+        XCTAssertEqual(editor.source(for: personal)?.id, "personal", "and nothing was renamed")
+    }
+
+    func testConfirmingTheRenameLetsTheActionProceed() throws {
+        var editor = try saved()
+        let personal = try XCTUnwrap(editor.handle("personal"))
+
+        editor.type(name: "home", into: personal)
+        XCTAssertEqual(editor.commit(), .awaitingConfirmation)
+
+        editor.confirmRename()
+        XCTAssertNil(editor.pendingRename)
+        XCTAssertEqual(editor.source(for: personal)?.id, "home", "the id changed")
+        XCTAssertEqual(editor.handles.id(of: personal), "home", "the handle names it")
+        XCTAssertEqual(editor.name(of: personal), "home", "and the field shows it")
+
         editor.addSource()
-        XCTAssertEqual(editor.config.sources.count, 2, "and so does the add")
+        XCTAssertEqual(editor.config.sources.count, 3, "the add goes through once the alert is answered")
     }
 
     // MARK: A removed source

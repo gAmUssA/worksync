@@ -542,7 +542,11 @@ extension MenuBarModel {
         // refusal stops the add, the way it stops a save — the user has a name
         // on screen that cannot be applied, and adding a source underneath it
         // would clear the error and move the selection off the problem.
-        if sourceNameDraft.isDirty, commitSourceIDDraft().blocksAction {
+        //
+        // Asked unconditionally. Gating this on a dirty field inferred "nothing
+        // is pending" from "nothing has been typed since", which an open alert
+        // and a restored name together make false.
+        if commitSourceIDDraft().blocksAction {
             return
         }
         guard var config = editingConfig else { return }
@@ -638,7 +642,7 @@ extension MenuBarModel {
         committingRename: Bool = false,
         keepingFilterDrafts: Bool = false
     ) {
-        if committingRename, sourceNameDraft.isDirty, commitSourceIDDraft().blocksAction {
+        if committingRename, commitSourceIDDraft().blocksAction {
             // The name cannot be applied, so the move does not happen: the typed
             // text stays in the field and the reason stays under it. Moving on
             // would take both away, which is the one thing this draft exists to
@@ -683,6 +687,13 @@ extension MenuBarModel {
     /// to swallow a refusal and how switching rows used to discard the typed
     /// name along with it.
     func commitSourceIDDraft() -> SourceNameCommit {
+        // An open confirmation outranks whatever the field says now. Re-judging
+        // the text can report `settled` — a retained setter putting the original
+        // name back is enough — while the alert is still on screen waiting for
+        // an answer about a rename nobody has withdrawn.
+        if pendingRename != nil {
+            return .awaitingConfirmation
+        }
         guard let pending = sourceNameDraft.pending, let config = editingConfig,
               // The field's own source, not whatever currently answers to the
               // id it was seeded with.
@@ -944,7 +955,7 @@ extension MenuBarModel {
         // Save is a commit point for the id field too. Without this, a name
         // typed but never submitted is silently dropped by the save it looks
         // like it was part of.
-        if sourceNameDraft.isDirty, commitSourceIDDraft().blocksAction {
+        if commitSourceIDDraft().blocksAction {
             return
         }
         // A refused id or an open warning has to be resolved first, otherwise
