@@ -688,21 +688,24 @@ extension MenuBarModel {
         editingConfig?.sources.first { $0.id == sourceID }?[keyPath: field.keyPath] ?? []
     }
 
-    func titleFilterDraft(_ field: TitleFilterField) -> String {
-        titleFilterDrafts.text(field.rawValue, of: selectedSourceID)
+    /// The draft reads and writes name their source, like every other
+    /// operation here. The selection decides what the form RENDERS; it must
+    /// never decide what an operation ACTS on, or a callback arriving from one
+    /// source's controls works on whichever source is selected by then.
+    func titleFilterDraft(_ field: TitleFilterField, of sourceID: String) -> String {
+        titleFilterDrafts.text(field.rawValue, of: sourceID)
     }
 
-    func setTitleFilterDraft(_ field: TitleFilterField, to text: String) {
-        titleFilterDrafts.setText(text, field.rawValue, of: selectedSourceID)
+    func setTitleFilterDraft(_ field: TitleFilterField, to text: String, of sourceID: String) {
+        titleFilterDrafts.setText(text, field.rawValue, of: sourceID)
     }
 
     func titleFilterDraftCheck(_ field: TitleFilterField, of sourceID: String) -> TitleFilterEntry.Check {
-        TitleFilterEntry.check(titleFilterDraft(field), against: titleFilterEntries(field, of: sourceID))
+        TitleFilterEntry.check(
+            titleFilterDraft(field, of: sourceID), against: titleFilterEntries(field, of: sourceID)
+        )
     }
 
-    /// Adds what is in the field's draft. Silent when the draft is not
-    /// addable — the button that calls this is disabled in that state, and the
-    /// reason is already on screen.
     /// The rows to render, each carrying an identity that outlives its
     /// position.
     func titleFilterRows(_ field: TitleFilterField, of sourceID: String) -> [TitleFilterRow] {
@@ -711,14 +714,21 @@ extension MenuBarModel {
         )
     }
 
+    /// Adds what is in the field's draft to `sourceID`. Silent when the draft is
+    /// not addable — the button that calls this is disabled in that state, and
+    /// the reason is already on screen.
+    ///
+    /// The add and the clear travel together, taking one source id, so no
+    /// arrangement of callbacks can add to one source and clear another.
     func addTitleFilter(_ field: TitleFilterField, to sourceID: String) {
         guard let sources = editingConfig?.sources,
-              let updated = TitleFilterEntry.adding(
-                  titleFilterDraft(field), to: field.keyPath, ofSourceWith: sourceID, in: sources
+              let committed = TitleFilterEntry.committingDraft(
+                  field.rawValue, to: field.keyPath, ofSourceWith: sourceID,
+                  in: sources, drafts: titleFilterDrafts
               ) else { return }
-        editingConfig?.sources = updated
+        editingConfig?.sources = committed.sources
+        titleFilterDrafts = committed.drafts
         titleFilterRowIDs.appended(to: list(field, sourceID))
-        titleFilterDrafts.clear(field.rawValue, of: selectedSourceID)
     }
 
     /// Rewrites one row as the user types in it.

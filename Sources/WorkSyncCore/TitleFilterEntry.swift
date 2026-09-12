@@ -106,6 +106,32 @@ public enum TitleFilterEntry {
         return updated
     }
 
+    /// Adds one source's draft to that same source's list, and clears the draft
+    /// only if the entry landed. Nil when nothing changed.
+    ///
+    /// Both halves take one source id, in one call, because splitting them is
+    /// how a commit for one source came to clear another's: the add took the id
+    /// the callback carried and the clear read whatever was selected by then,
+    /// so text typed for the source the user was looking at could be appended
+    /// to a different one and then wiped.
+    ///
+    /// A draft belonging to another source reads as empty here, so a callback
+    /// whose source no longer applies is ignored rather than retargeted.
+    public static func committingDraft(
+        _ field: String,
+        to list: WritableKeyPath<SourceConfig, [String]>,
+        ofSourceWith id: String,
+        in sources: [SourceConfig],
+        drafts: TitleFilterDrafts
+    ) -> (sources: [SourceConfig], drafts: TitleFilterDrafts)? {
+        guard let updated = adding(
+            drafts.text(field, of: id), to: list, ofSourceWith: id, in: sources
+        ) else { return nil }
+        var cleared = drafts
+        cleared.clear(field, of: id)
+        return (updated, cleared)
+    }
+
     /// `sources` with one row removed from a source's list, or nil when the
     /// source is gone or the row is out of range.
     public static func removing(

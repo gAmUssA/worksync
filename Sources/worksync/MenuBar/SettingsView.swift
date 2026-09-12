@@ -347,8 +347,8 @@ struct SettingsView: View {
 
             HStack(spacing: 6) {
                 TextField(field.addPlaceholder, text: Binding(
-                    get: { model.titleFilterDraft(field) },
-                    set: { model.setTitleFilterDraft(field, to: $0) }
+                    get: { model.titleFilterDraft(field, of: sourceID) },
+                    set: { model.setTitleFilterDraft(field, to: $0, of: sourceID) }
                 ))
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { model.addTitleFilter(field, to: sourceID) }
