@@ -15,6 +15,12 @@ public struct PassOutcome: Sendable {
     public let result: ApplyResult?
     public let diagnostics: PassDiagnostics?
 
+    public init(disposition: Disposition, result: ApplyResult?, diagnostics: PassDiagnostics?) {
+        self.disposition = disposition
+        self.result = result
+        self.diagnostics = diagnostics
+    }
+
     public var summary: String {
         switch disposition {
         case .completed:
