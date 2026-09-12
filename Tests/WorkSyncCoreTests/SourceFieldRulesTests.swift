@@ -400,6 +400,60 @@ final class SourceFieldRulesTests: XCTestCase {
         XCTAssertFalse(problem?.contains("nothing would be mirrored") == true)
     }
 
+    private func calendarsWithWritableTarget(_ writable: Bool) -> [CalendarRef] {
+        loopCalendars.map { calendar in
+            CalendarRef(
+                id: calendar.id,
+                title: calendar.title,
+                accountTitle: calendar.accountTitle,
+                allowsModifications: calendar.id == "work" ? writable : calendar.allowsModifications
+            )
+        }
+    }
+
+    func testReadOnlyDefaultIsNotOfferedAndInheritingSourceShowsProblem() {
+        let calendars = calendarsWithWritableTarget(false)
+        XCTAssertFalse(SourceFieldRules.targetCalendarChoices(
+            sourceID: "personal", config: loopConfig, calendars: calendars
+        ).contains(""))
+        XCTAssertEqual(
+            SourceFieldRules.targetWritabilityProblem(config: loopConfig, calendars: calendars),
+            CalendarStoreError.calendarNotWritable("Work").errorDescription
+        )
+    }
+
+    func testWritableInheritanceAndRevokedPermissionFollowCurrentEnumeration() throws {
+        let writable = calendarsWithWritableTarget(true)
+        let revoked = calendarsWithWritableTarget(false)
+        for calendars in [writable, revoked, writable] {
+            let allowed = try XCTUnwrap(calendars.first { $0.id == "work" }?.allowsModifications)
+            XCTAssertEqual(SourceFieldRules.targetCalendarChoices(
+                sourceID: "personal", config: loopConfig, calendars: calendars
+            ).contains(""), allowed)
+            XCTAssertEqual(
+                SourceFieldRules.targetWritabilityProblem(config: loopConfig, calendars: calendars) == nil,
+                allowed
+            )
+        }
+    }
+
+    func testExplicitOverrideEscapesReadOnlyDefaultButReadOnlyExplicitTargetIsBlocked() {
+        let calendars = calendarsWithWritableTarget(false) + [
+            CalendarRef(id: "blocks", title: "Blocks", accountTitle: "Cloud", allowsModifications: true),
+        ]
+        var config = loopConfig
+        config.sources[0].targetCalendar = "Blocks"
+        XCTAssertNil(SourceFieldRules.targetWritabilityProblem(config: config, calendars: calendars))
+        XCTAssertTrue(SourceFieldRules.targetCalendarChoices(
+            sourceID: "personal", config: config, calendars: calendars
+        ).contains("Blocks"))
+        config.sources[0].targetCalendar = "work"
+        XCTAssertEqual(
+            SourceFieldRules.targetWritabilityProblem(config: config, calendars: calendars),
+            CalendarStoreError.calendarNotWritable("Work").errorDescription
+        )
+    }
+
     private static let fixture = """
     [target]
     account = "Work"

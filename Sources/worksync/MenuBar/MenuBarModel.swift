@@ -554,6 +554,11 @@ extension MenuBarModel {
         )
     }
 
+    var targetWritabilityProblem: String? {
+        guard let config = editingConfig else { return nil }
+        return SourceFieldRules.targetWritabilityProblem(config: config, calendars: availableCalendars)
+    }
+
     var feedbackLoopProblem: String? {
         guard let config = editingConfig else { return nil }
         return SourceFieldRules.feedbackLoopProblem(config: config, calendars: availableCalendars)
@@ -1015,7 +1020,7 @@ extension MenuBarModel {
     /// Everything that stops a save, in the order the user is most likely to be
     /// looking at.
     var settingsProblem: String? {
-        titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem
+        titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem ?? targetWritabilityProblem
     }
 
     // MARK: Saving

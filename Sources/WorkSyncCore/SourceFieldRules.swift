@@ -12,6 +12,18 @@ import Foundation
 /// save and is enforced by `Resolver` at sync time, not by config validation.
 /// Feedback-loop checks delegate to that same resolver before save.
 public enum SourceFieldRules {
+    /// Check effective targets, not an unused default when every source overrides it.
+    /// Missing/ambiguous names retain their resolution diagnostics.
+    public static func targetWritabilityProblem(config: Config, calendars: [CalendarRef]) -> String? {
+        for source in config.sources {
+            if let target = try? Resolver.target(for: source, config: config, calendars: calendars),
+               let problem = target.writabilityProblem {
+                return problem.errorDescription
+            }
+        }
+        return nil
+    }
+
     /// Use the sync resolver's own guard, including inherited and cross-source targets.
     /// Other resolution errors retain their existing settings/ sync enforcement paths.
     public static func feedbackLoopProblem(config: Config, calendars: [CalendarRef]) -> String? {
@@ -35,6 +47,12 @@ public enum SourceFieldRules {
         return choices.filter { title in
             var proposed = config
             proposed.sources[index].targetCalendar = title
+            guard let target = try? Resolver.target(
+                for: proposed.sources[index],
+                config: proposed,
+                calendars: calendars
+            ),
+                target.writabilityProblem == nil else { return false }
             return feedbackLoopProblem(config: proposed, calendars: calendars) == nil
         }
     }
@@ -141,7 +159,7 @@ public enum SourceFieldRules {
         // Resolution counts every match before writability can limit the picker.
         return accountCalendars.filter { candidate in
             matchingTitleCount(candidate.title, among: titles) == 1
-                && (!writableOnly || candidate.allowsModifications)
+                && (!writableOnly || candidate.writabilityProblem == nil)
         }.map(\.title).sorted()
     }
 

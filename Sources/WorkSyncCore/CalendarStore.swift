@@ -18,6 +18,11 @@ public struct CalendarRef: Hashable, Sendable {
     public let accountTitle: String
     public let allowsModifications: Bool
 
+    /// The same write-permission refusal used by settings, diagnostics, and stores.
+    public var writabilityProblem: CalendarStoreError? {
+        allowsModifications ? nil : .calendarNotWritable(title)
+    }
+
     public init(id: String, title: String, accountTitle: String, allowsModifications: Bool) {
         self.id = id
         self.title = title

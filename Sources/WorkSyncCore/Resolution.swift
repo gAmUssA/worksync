@@ -93,11 +93,8 @@ public enum Resolver {
                 problems.append(error)
             } catch {}
 
-            let targetTitle = source.targetCalendar.isEmpty ? config.target.calendar : source.targetCalendar
             do {
-                targetCals[source.id] = try find(
-                    account: config.target.account, calendar: targetTitle, in: calendars
-                )
+                targetCals[source.id] = try target(for: source, config: config, calendars: calendars)
             } catch let error as ResolutionError {
                 // Sources commonly share one target, so the same miss would
                 // otherwise be reported once per source.
@@ -122,6 +119,19 @@ public enum Resolver {
         return ResolutionReport(
             resolved: ResolvedCalendars(sourceCalendars: sourceCals, targetCalendars: targetCals),
             problems: problems
+        )
+    }
+
+    /// Resolve the effective target, including the empty per-source override.
+    public static func target(
+        for source: SourceConfig,
+        config: Config,
+        calendars: [CalendarRef]
+    ) throws -> CalendarRef {
+        try find(
+            account: config.target.account,
+            calendar: source.targetCalendar.isEmpty ? config.target.calendar : source.targetCalendar,
+            in: calendars
         )
     }
 

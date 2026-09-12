@@ -369,7 +369,7 @@ struct SettingsView: View {
         let calendars = model.targetCalendarChoices(for: source)
         let problem = model.calendarTitleProblem(
             source.targetCalendar, inAccount: targetAccount
-        ) ?? model.feedbackLoopProblem
+        ) ?? model.feedbackLoopProblem ?? model.targetWritabilityProblem
 
         Picker("Write blockers to", selection: Binding(
             get: { SourceFieldRules.pickerSelection(source.targetCalendar, choices: calendars) },
