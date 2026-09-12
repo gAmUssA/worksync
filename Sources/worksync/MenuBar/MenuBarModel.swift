@@ -486,6 +486,8 @@ extension MenuBarModel {
     }
 
     func closeSettings() {
+        // The list belongs to the form that asked for it, so it dies with it.
+        calendarChoicesTask?.cancel()
         screen = .dashboard
         editingConfig = nil
         sourceOrigins = [:]
@@ -501,8 +503,15 @@ extension MenuBarModel {
     /// `worksync calendars` uses. A popup cannot be typed wrong, and a free-text
     /// typo here hard-errors the whole sync (SPEC §11.1).
     private func loadCalendarChoices() {
+        // One lookup at a time, and only the current one may publish. Opening
+        // settings again while an enumeration is still running would otherwise
+        // let the old session finish last and repopulate the pickers with the
+        // calendars it found — silently, and long after the list it belongs to
+        // is gone.
+        calendarChoicesTask?.cancel()
         calendarChoicesTask = Task { [services] in
             let calendars = await services.calendarChoices()
+            guard !Task.isCancelled else { return }
             self.availableCalendars = calendars
         }
     }

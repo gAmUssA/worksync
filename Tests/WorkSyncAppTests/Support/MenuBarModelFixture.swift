@@ -19,6 +19,8 @@ final class MenuBarRecorder {
     var saveOutcome: ConfigWriteOutcome = .preserved
     var saveError: Error?
     var calendars: [CalendarRef] = []
+    /// When set, lookups wait here until the test finishes them.
+    var calendarGate: CalendarLookupGate?
     var health = DoctorReport(findings: [])
     var passOutcome = PassOutcome(disposition: .completed, result: nil, diagnostics: nil)
     var loginStatus: SMAppService.Status = .notRegistered
@@ -99,6 +101,38 @@ private struct RecordedSchedule: MenuBarScheduledAction {
 
     func cancel() {
         MainActor.assumeIsolated { recorder.cancelSchedule() }
+    }
+}
+
+/// Calendar lookups the test finishes by hand.
+///
+/// A real enumeration takes as long as EventKit takes, so overlapping lookups
+/// are a matter of timing. Held open here instead, which makes "the slow one
+/// finishes last" a thing a test can state rather than hope for.
+@MainActor
+final class CalendarLookupGate {
+    private var waiting: [CheckedContinuation<[CalendarRef], Never>] = []
+    private(set) var started = 0
+
+    var outstanding: Int {
+        waiting.count
+    }
+
+    func lookup() async -> [CalendarRef] {
+        started += 1
+        return await withCheckedContinuation { waiting.append($0) }
+    }
+
+    /// Finishes the lookup that started first — the slow one.
+    func finishOldest(_ calendars: [CalendarRef]) {
+        guard !waiting.isEmpty else { return }
+        waiting.removeFirst().resume(returning: calendars)
+    }
+
+    /// Finishes the lookup that started last.
+    func finishNewest(_ calendars: [CalendarRef]) {
+        guard !waiting.isEmpty else { return }
+        waiting.removeLast().resume(returning: calendars)
     }
 }
 
@@ -226,6 +260,9 @@ enum MenuBarFixture {
                 },
                 calendarChoices: {
                     await MainActor.run { recorder.noteCalendars() }
+                    if let gate = await MainActor.run(body: { recorder.calendarGate }) {
+                        return await gate.lookup()
+                    }
                     return await MainActor.run { recorder.calendars }
                 },
                 runPass: {
