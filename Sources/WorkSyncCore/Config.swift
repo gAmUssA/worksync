@@ -293,17 +293,24 @@ public enum ConfigLoader {
             try checkNoBlankEntries(source.titleMatches, "source \"\(source.id)\".title_matches")
             try checkNoBlankEntries(source.titleExcludes, "source \"\(source.id)\".title_excludes")
             // An unsatisfiable window would silently mirror nothing at all.
-            if source.maxDurationMinutes > 0, source.maxDurationMinutes < source.minDurationMinutes {
+            //
+            // Both of these ask `SourceFieldRules`, which is also what the
+            // settings form asks before it lets the user get here. Asking the
+            // same predicate is the point: a hard-coded copy drifts, and then a
+            // value refused at the field is accepted at save, or the reverse.
+            if SourceFieldRules.maxDurationProblem(
+                max: source.maxDurationMinutes, min: source.minDurationMinutes
+            ) != nil {
                 throw ConfigError.invalidValue(
                     field: "source \"\(source.id)\".max_duration_minutes",
                     value: String(source.maxDurationMinutes),
                     allowed: ">= min_duration_minutes (\(source.minDurationMinutes)), or 0 for unlimited"
                 )
             }
-            if source.skipWeekdays.count == 7 {
+            if SourceFieldRules.skippedDaysProblem(source.skipWeekdays) != nil {
                 throw ConfigError.invalidValue(
                     field: "source \"\(source.id)\".skip_weekdays",
-                    value: "all seven days",
+                    value: "\(source.skipWeekdays.count) days",
                     allowed: "at most six days — skipping every day mirrors nothing"
                 )
             }

@@ -108,6 +108,86 @@ final class SourceFieldRulesTests: XCTestCase {
         XCTAssertEqual(Weekday.name(for: Weekday.pickerOrder[0]), "mon", "the week starts on Monday")
     }
 
+    // MARK: Calendar titles a config can name
+
+    /// Config names a calendar by title, and `Resolver.find` refuses a title
+    /// that matches two — so a shared title is not a choice at all, whichever
+    /// one the user meant. A popup offering it is a popup that can be wrong,
+    /// which is the whole justification for it being a popup (SPEC §11.1).
+    func testATitleSharedByTwoCalendarsIsNotOffered() {
+        let titles = ["Home", "Work", "Work", "Travel"]
+        XCTAssertEqual(SourceFieldRules.unambiguousTitles(among: titles), ["Home", "Travel"])
+        XCTAssertEqual(SourceFieldRules.ambiguousTitles(among: titles), ["Work"])
+    }
+
+    func testEveryDistinctTitleIsOffered() {
+        let titles = ["Home", "Work", "Travel"]
+        XCTAssertEqual(SourceFieldRules.unambiguousTitles(among: titles), titles)
+        XCTAssertTrue(SourceFieldRules.ambiguousTitles(among: titles).isEmpty)
+    }
+
+    func testAChosenAmbiguousTitleIsRefusedWithBothNamesCounted() throws {
+        let problem = try XCTUnwrap(
+            SourceFieldRules.calendarTitleProblem("Work", among: ["Home", "Work", "Work"])
+        )
+        XCTAssertTrue(problem.contains("Work"), problem)
+        XCTAssertTrue(problem.contains("2 calendars"), problem)
+    }
+
+    func testAResolvableTitleIsNotRefused() {
+        XCTAssertNil(SourceFieldRules.calendarTitleProblem("Home", among: ["Home", "Work", "Work"]))
+    }
+
+    /// Empty is "inherit the target calendar", not a calendar title, so it is
+    /// never ambiguous.
+    func testTheInheritedChoiceIsNeverRefused() {
+        XCTAssertNil(SourceFieldRules.calendarTitleProblem(
+            SourceFieldRules.inheritedTargetCalendar, among: ["Work", "Work"]
+        ))
+    }
+
+    /// The calendar list loads asynchronously; nothing is known to collide
+    /// before it arrives, and a spurious error on an empty list would flag every
+    /// config on every open.
+    func testNothingIsRefusedBeforeTheCalendarListLoads() {
+        XCTAssertNil(SourceFieldRules.calendarTitleProblem("Work", among: []))
+        XCTAssertTrue(SourceFieldRules.unambiguousTitles(among: []).isEmpty)
+    }
+
+    /// What the form refuses is what the resolver refuses: two calendars sharing
+    /// a title make the whole sync fail with `ResolutionError.ambiguous`, so a
+    /// popup that offers that title is a popup that can be wrong.
+    func testTheRefusalAgreesWithTheResolver() throws {
+        let calendars = [
+            CalendarRef(id: "1", title: "Work", accountTitle: "iCloud", allowsModifications: true),
+            CalendarRef(id: "2", title: "Work", accountTitle: "iCloud", allowsModifications: true),
+            CalendarRef(id: "3", title: "Home", accountTitle: "iCloud", allowsModifications: true),
+        ]
+        let config = try ConfigLoader.parse("""
+        [target]
+        account = "iCloud"
+        calendar = "Work"
+
+        [[source]]
+        id = "personal"
+        account = "iCloud"
+        calendar = "Home"
+        """)
+
+        XCTAssertNotNil(SourceFieldRules.calendarTitleProblem("Work", among: calendars.map(\.title)))
+        let report = Resolver.resolveAll(config: config, calendars: calendars)
+        XCTAssertTrue(
+            report.problems.contains {
+                if case .ambiguous = $0 {
+                    true
+                } else {
+                    false
+                }
+            },
+            "the resolver reports exactly what the form now refuses: \(report.problems)"
+        )
+    }
+
     // MARK: Where this source's blockers are written
 
     /// Empty means "wherever `[target]` points", which a blank row in a popup
@@ -135,6 +215,39 @@ final class SourceFieldRulesTests: XCTestCase {
         config.sources[0].targetCalendar = SourceFieldRules.inheritedTargetCalendar
         XCTAssertNoThrow(try ConfigLoader.validate(config))
         XCTAssertEqual(config.sources[0].targetCalendar, "")
+    }
+
+    // MARK: The field rules and the validator are the same rules
+
+    /// They are documented as the same rule, so they must not be two copies of
+    /// it. A set with more than seven entries is constructible in memory and
+    /// used to be refused at the field and accepted at save.
+    func testAnOversizedWeekdaySetIsTreatedIdentically() throws {
+        var config = try ConfigLoader.parse(Self.fixture)
+        config.sources[0].skipWeekdays = Set(1 ... 9) // more than a week, in memory
+
+        XCTAssertNotNil(SourceFieldRules.skippedDaysProblem(config.sources[0].skipWeekdays))
+        XCTAssertThrowsError(try ConfigLoader.validate(config), "validate must refuse what the field refuses")
+    }
+
+    func testSixDaysIsAcceptedByBoth() throws {
+        var config = try ConfigLoader.parse(Self.fixture)
+        config.sources[0].skipWeekdays = [1, 2, 3, 4, 5, 6]
+
+        XCTAssertNil(SourceFieldRules.skippedDaysProblem(config.sources[0].skipWeekdays))
+        XCTAssertNoThrow(try ConfigLoader.validate(config))
+    }
+
+    func testTheDurationWindowIsAlsoOneRule() throws {
+        var config = try ConfigLoader.parse(Self.fixture)
+        config.sources[0].minDurationMinutes = 30
+        config.sources[0].maxDurationMinutes = 15
+        XCTAssertNotNil(SourceFieldRules.maxDurationProblem(max: 15, min: 30))
+        XCTAssertThrowsError(try ConfigLoader.validate(config))
+
+        config.sources[0].maxDurationMinutes = 0
+        XCTAssertNil(SourceFieldRules.maxDurationProblem(max: 0, min: 30))
+        XCTAssertNoThrow(try ConfigLoader.validate(config))
     }
 
     private static let fixture = """

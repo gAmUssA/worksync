@@ -363,7 +363,13 @@ struct SettingsView: View {
         // where blockers are written (SPEC §4.1).
         let targetAccount = model.editingConfig?.target.account ?? ""
         let inherited = model.editingConfig?.target.calendar ?? ""
-        let calendars = model.writableCalendarChoices(inAccount: targetAccount)
+        // Only titles that name one calendar: a title shared by two resolves to
+        // neither, so offering it would be the hard sync error this popup exists
+        // to prevent.
+        let calendars = model.selectableCalendarChoices(inAccount: targetAccount, writableOnly: true)
+        let problem = model.calendarTitleProblem(
+            source.targetCalendar, inAccount: targetAccount, writableOnly: true
+        )
 
         Picker("Write blockers to", selection: Binding(
             get: { source.targetCalendar },
@@ -374,15 +380,23 @@ struct SettingsView: View {
             ))
             .tag(SourceFieldRules.inheritedTargetCalendar)
 
-            // A saved value naming a calendar that no longer exists stays in the
-            // list, so the picker cannot silently rewrite config to something
-            // the user never chose.
+            // A saved value the list cannot offer stays in it, so the picker
+            // cannot silently rewrite config to something the user never chose.
+            // Two reasons it might not be offered, and they read differently.
             if !source.targetCalendar.isEmpty, !calendars.contains(source.targetCalendar) {
-                Text("\(source.targetCalendar) (not found)").tag(source.targetCalendar)
+                Text(problem == nil
+                    ? "\(source.targetCalendar) (not found)"
+                    : "\(source.targetCalendar) (name used twice)"
+                ).tag(source.targetCalendar)
             }
             ForEach(calendars, id: \.self) { Text($0).tag($0) }
         }
         .font(.callout)
+
+        if let problem {
+            Text(problem).font(.caption).foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// Days this source mirrors nothing on.
@@ -604,9 +618,14 @@ struct SettingsView: View {
         writableOnly: Bool
     ) -> some View {
         let accounts = model.accountChoices
-        let calendars = writableOnly
-            ? model.writableCalendarChoices(inAccount: account.wrappedValue)
-            : model.calendarChoices(inAccount: account.wrappedValue)
+        // Same rule as the target picker: a title naming two calendars is not a
+        // choice, whichever one the user means.
+        let calendars = model.selectableCalendarChoices(
+            inAccount: account.wrappedValue, writableOnly: writableOnly
+        )
+        let problem = model.calendarTitleProblem(
+            calendar.wrappedValue, inAccount: account.wrappedValue, writableOnly: writableOnly
+        )
 
         if accounts.isEmpty {
             Text("No calendars available — grant calendar access first.")
@@ -625,11 +644,19 @@ struct SettingsView: View {
 
             Picker("Calendar", selection: calendar) {
                 if !calendars.contains(calendar.wrappedValue) {
-                    Text("\(calendar.wrappedValue) (not found)").tag(calendar.wrappedValue)
+                    Text(problem == nil
+                        ? "\(calendar.wrappedValue) (not found)"
+                        : "\(calendar.wrappedValue) (name used twice)"
+                    ).tag(calendar.wrappedValue)
                 }
                 ForEach(calendars, id: \.self) { Text($0).tag($0) }
             }
             .font(.callout)
+
+            if let problem {
+                Text(problem).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

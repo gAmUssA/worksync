@@ -70,6 +70,44 @@ public enum SourceFieldRules {
         days.count >= Weekday.componentCount ? lastDayRefusedNote : nil
     }
 
+    // MARK: Calendar titles a config can name
+
+    /// Titles that name exactly one calendar in `titles`.
+    ///
+    /// Config stores a calendar by title, and `Resolver.find` refuses a title
+    /// that matches more than one — `ResolutionError.ambiguous`, a hard sync
+    /// failure. So a title shared by two calendars is not a choice at all,
+    /// whichever one the user meant, and a popup that offers it is a popup that
+    /// can be wrong.
+    ///
+    /// The same mistake as keying a source by its id: a name that is not unique
+    /// is not identity. The config format keeps storing titles, so the fix is to
+    /// stop offering the ones that cannot be resolved rather than to store
+    /// something else.
+    public static func unambiguousTitles(among titles: [String]) -> [String] {
+        var counts: [String: Int] = [:]
+        for title in titles {
+            counts[title, default: 0] += 1
+        }
+        return titles.filter { counts[$0] == 1 }
+    }
+
+    /// Titles in `titles` that name more than one calendar.
+    public static func ambiguousTitles(among titles: [String]) -> Set<String> {
+        var counts: [String: Int] = [:]
+        for title in titles {
+            counts[title, default: 0] += 1
+        }
+        return Set(counts.filter { $0.value > 1 }.keys)
+    }
+
+    /// Why a chosen calendar title cannot be used, or nil.
+    public static func calendarTitleProblem(_ title: String, among titles: [String]) -> String? {
+        guard !title.isEmpty, ambiguousTitles(among: titles).contains(title) else { return nil }
+        let count = titles.filter { $0 == title }.count
+        return "“\(title)” is the name of \(count) calendars in this account, so the sync cannot tell which one you mean. Rename one of them in Calendar."
+    }
+
     // MARK: Where this source's blockers are written
 
     /// Empty `target_calendar` means the source writes to `[target].calendar`,

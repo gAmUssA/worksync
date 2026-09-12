@@ -534,6 +534,30 @@ extension MenuBarModel {
             .sorted()
     }
 
+    /// The titles a config can actually name in `account`.
+    ///
+    /// A title shared by two calendars resolves to neither — `Resolver.find`
+    /// refuses it — so offering it would be a popup that can be wrong, which is
+    /// the one thing a popup is here to prevent (SPEC §11.1).
+    func selectableCalendarChoices(inAccount account: String, writableOnly: Bool) -> [String] {
+        SourceFieldRules.unambiguousTitles(
+            among: writableOnly
+                ? writableCalendarChoices(inAccount: account)
+                : calendarChoices(inAccount: account)
+        )
+    }
+
+    /// Why the calendar `title` cannot be used in `account`, or nil. Empty while
+    /// the calendar list is still loading, since nothing is known to collide.
+    func calendarTitleProblem(_ title: String, inAccount account: String, writableOnly: Bool) -> String? {
+        SourceFieldRules.calendarTitleProblem(
+            title,
+            among: writableOnly
+                ? writableCalendarChoices(inAccount: account)
+                : calendarChoices(inAccount: account)
+        )
+    }
+
     // MARK: Source list
 
     func addSource() {
@@ -969,6 +993,21 @@ extension MenuBarModel {
             if let problem = SourceFieldRules.skippedDaysProblem(source.skipWeekdays) {
                 return "“\(source.id)”: \(problem)"
             }
+            if let problem = calendarTitleProblem(
+                source.calendar, inAccount: source.account, writableOnly: false
+            ) {
+                return "“\(source.id)”: \(problem)"
+            }
+            if let problem = calendarTitleProblem(
+                source.targetCalendar, inAccount: config.target.account, writableOnly: true
+            ) {
+                return "“\(source.id)” writes to \(problem)"
+            }
+        }
+        if let problem = calendarTitleProblem(
+            config.target.calendar, inAccount: config.target.account, writableOnly: true
+        ) {
+            return "Target calendar: \(problem)"
         }
         return nil
     }
