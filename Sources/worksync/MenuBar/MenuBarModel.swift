@@ -516,8 +516,7 @@ extension MenuBarModel {
     }
 
     var accountChoices: [String] {
-        var seen = Set<String>()
-        return availableCalendars.map(\.accountTitle).filter { seen.insert($0).inserted }.sorted()
+        SourceFieldRules.accountChoices(in: availableCalendars)
     }
 
     func calendarChoices(inAccount account: String) -> [String] {
@@ -546,6 +545,20 @@ extension MenuBarModel {
         )
     }
 
+    func targetCalendarChoices(for source: SourceConfig) -> [String] {
+        guard let config = editingConfig else { return [] }
+        return SourceFieldRules.targetCalendarChoices(
+            sourceID: source.id,
+            config: config,
+            calendars: availableCalendars
+        )
+    }
+
+    var feedbackLoopProblem: String? {
+        guard let config = editingConfig else { return nil }
+        return SourceFieldRules.feedbackLoopProblem(config: config, calendars: availableCalendars)
+    }
+
     // MARK: Source list
 
     func addSource() {
@@ -569,9 +582,7 @@ extension MenuBarModel {
             name = "\(base)-\(counter)"
             counter += 1
         }
-        let account = accountChoices.first ?? ""
-        let calendar = calendarChoices(inAccount: account).first ?? ""
-        config.sources.append(SourceConfig(id: name, account: account, calendar: calendar))
+        config.sources.append(SourceFieldRules.newSource(id: name, config: config, calendars: availableCalendars))
         editingConfig = config
         // The dirty id draft was already committed above, while the list still
         // looked the way the user left it.
@@ -1004,7 +1015,7 @@ extension MenuBarModel {
     /// Everything that stops a save, in the order the user is most likely to be
     /// looking at.
     var settingsProblem: String? {
-        titleFilterProblem ?? sourceFieldProblem
+        titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem
     }
 
     // MARK: Saving

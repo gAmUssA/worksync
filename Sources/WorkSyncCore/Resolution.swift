@@ -128,8 +128,10 @@ public enum Resolver {
     private static func find(account: String, calendar: String, in calendars: [CalendarRef]) throws -> CalendarRef {
         let accountMatches = Self.calendars(inAccount: account, among: calendars)
         guard !accountMatches.isEmpty else {
-            var seen = Set<String>()
-            let available = calendars.map(\.accountTitle).filter { seen.insert($0).inserted }
+            var available: [String] = []
+            for title in calendars.map(\.accountTitle) where !available.contains(where: { namesMatch($0, title) }) {
+                available.append(title)
+            }
             throw ResolutionError.accountNotFound(account, available: available)
         }
         let matches = accountMatches.filter { namesMatch($0.title, calendar) }

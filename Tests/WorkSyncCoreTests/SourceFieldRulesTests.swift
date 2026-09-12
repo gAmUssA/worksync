@@ -315,6 +315,91 @@ final class SourceFieldRulesTests: XCTestCase {
         XCTAssertNoThrow(try ConfigLoader.validate(config))
     }
 
+    private var loopCalendars: [CalendarRef] {
+        [
+            CalendarRef(id: "personal", title: "Personal", accountTitle: "Cloud", allowsModifications: true),
+            CalendarRef(id: "work", title: "Work", accountTitle: "Cloud", allowsModifications: true),
+        ]
+    }
+
+    private var loopConfig: Config {
+        Config(
+            general: GeneralConfig(),
+            target: TargetConfig(account: "cloud", calendar: "Work"),
+            sources: [SourceConfig(id: "personal", account: "CLOUD", calendar: "personal")]
+        )
+    }
+
+    func testExplicitFeedbackTargetIsExcludedAndBlocksSave() {
+        var config = loopConfig
+        XCTAssertFalse(SourceFieldRules.targetCalendarChoices(
+            sourceID: "personal", config: config, calendars: loopCalendars
+        ).contains("Personal"))
+        config.sources[0].targetCalendar = "PERSONAL"
+        XCTAssertNotNil(SourceFieldRules.feedbackLoopProblem(config: config, calendars: loopCalendars))
+    }
+
+    func testInheritedFeedbackTargetIsExcludedAndBlocksSave() {
+        var config = loopConfig
+        config.target.calendar = "PERSONAL"
+        XCTAssertFalse(SourceFieldRules.targetCalendarChoices(
+            sourceID: "personal", config: config, calendars: loopCalendars
+        ).contains(""))
+        XCTAssertNotNil(SourceFieldRules.feedbackLoopProblem(config: config, calendars: loopCalendars))
+        config.sources[0].targetCalendar = "Work"
+        XCTAssertNil(SourceFieldRules.feedbackLoopProblem(config: config, calendars: loopCalendars))
+    }
+
+    func testTargetCannotCollideWithAnotherSource() {
+        var config = loopConfig
+        let calendars = loopCalendars + [
+            CalendarRef(id: "travel", title: "Travel", accountTitle: "Cloud", allowsModifications: true),
+        ]
+        config.sources.append(SourceConfig(id: "travel", account: "Cloud", calendar: "Travel"))
+        XCTAssertFalse(SourceFieldRules.targetCalendarChoices(
+            sourceID: "personal", config: config, calendars: calendars
+        ).contains("Travel"))
+        config.sources[0].targetCalendar = "Travel"
+        XCTAssertNotNil(SourceFieldRules.feedbackLoopProblem(config: config, calendars: calendars))
+    }
+
+    func testPickerUsesResolverSpellingWithoutFallbackOrDuplicate() {
+        XCTAssertEqual(SourceFieldRules.pickerSelection("work", choices: ["Work"]), "Work")
+        XCTAssertEqual(SourceFieldRules.pickerSelection("cloud", choices: ["Cloud"]), "Cloud")
+        XCTAssertEqual(SourceFieldRules.pickerSelection("Missing", choices: ["Work"]), "Missing")
+        XCTAssertEqual(SourceFieldRules.pickerSelection("", choices: ["", "Work"]), "")
+        let calendars = loopCalendars + [
+            CalendarRef(id: "other", title: "Other", accountTitle: "CLOUD", allowsModifications: true),
+        ]
+        XCTAssertEqual(SourceFieldRules.accountChoices(in: calendars).count, 1)
+    }
+
+    func testNewSourceSkipsAmbiguousFirstTitleAndResolves() throws {
+        let calendars = loopCalendars + [
+            CalendarRef(id: "a1", title: "A", accountTitle: "Cloud", allowsModifications: true),
+            CalendarRef(id: "a2", title: "A", accountTitle: "Cloud", allowsModifications: false),
+        ]
+        var config = loopConfig
+        config.sources = []
+        let source = SourceFieldRules.newSource(id: "new", config: config, calendars: calendars)
+        XCTAssertEqual(source.calendar, "Personal")
+        config.sources.append(source)
+        XCTAssertNoThrow(try Resolver.resolve(config: config, calendars: calendars))
+    }
+
+    func testDurationMessageOnlyClaimsTimedEventsAreExcluded() {
+        var source = loopConfig.sources[0]
+        source.includeAllDay = true
+        source.minDurationMinutes = 30
+        source.maxDurationMinutes = 15
+        let problem = SourceFieldRules.maxDurationProblem(
+            max: source.maxDurationMinutes,
+            min: source.minDurationMinutes
+        )
+        XCTAssertTrue(problem?.contains("no timed event") == true)
+        XCTAssertFalse(problem?.contains("nothing would be mirrored") == true)
+    }
+
     private static let fixture = """
     [target]
     account = "Work"

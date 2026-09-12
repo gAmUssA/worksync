@@ -10,7 +10,66 @@ import Foundation
 /// `ConfigLoader.validate`. Coalescing-gap applicability is UI guidance, not a
 /// validation error. Calendar ambiguity uses the loaded calendar list before
 /// save and is enforced by `Resolver` at sync time, not by config validation.
+/// Feedback-loop checks delegate to that same resolver before save.
 public enum SourceFieldRules {
+    /// Use the sync resolver's own guard, including inherited and cross-source targets.
+    /// Other resolution errors retain their existing settings/ sync enforcement paths.
+    public static func feedbackLoopProblem(config: Config, calendars: [CalendarRef]) -> String? {
+        Resolver.resolveAll(config: config, calendars: calendars).problems.first {
+            if case .sourceIsTarget = $0 {
+                return true
+            }
+            return false
+        }?.errorDescription
+    }
+
+    /// Each choice is checked as a proposed config, so no feedback-loop rule is
+    /// duplicated here. Empty is tested as inheritance, not automatically allowed.
+    public static func targetCalendarChoices(sourceID: String, config: Config, calendars: [CalendarRef]) -> [String] {
+        guard let index = config.sources.firstIndex(where: { $0.id == sourceID }) else { return [] }
+        let choices = [""] + selectableCalendarChoices(
+            in: calendars,
+            account: config.target.account,
+            writableOnly: true
+        )
+        return choices.filter { title in
+            var proposed = config
+            proposed.sources[index].targetCalendar = title
+            return feedbackLoopProblem(config: proposed, calendars: calendars) == nil
+        }
+    }
+
+    /// Canonical picker tag only; opening a view must not rewrite saved spelling.
+    public static func pickerSelection(_ value: String, choices: [String]) -> String {
+        choices.first { Resolver.namesMatch($0, value) } ?? value
+    }
+
+    public static func accountChoices(in calendars: [CalendarRef]) -> [String] {
+        var choices: [String] = []
+        for account in calendars.map(\.accountTitle).sorted() {
+            if !choices.contains(where: { Resolver.namesMatch($0, account) }) {
+                choices.append(account)
+            }
+        }
+        return choices
+    }
+
+    /// Prefer a resolvable source seed. If no choice exists, leave an empty draft
+    /// for the user to complete rather than choosing a known ambiguous title.
+    public static func newSource(id: String, config: Config, calendars: [CalendarRef]) -> SourceConfig {
+        for account in accountChoices(in: calendars) {
+            for title in selectableCalendarChoices(in: calendars, account: account, writableOnly: false) {
+                let source = SourceConfig(id: id, account: account, calendar: title)
+                var proposed = config
+                proposed.sources.append(source)
+                if feedbackLoopProblem(config: proposed, calendars: calendars) == nil {
+                    return source
+                }
+            }
+        }
+        return SourceConfig(id: id, account: accountChoices(in: calendars).first ?? "", calendar: "")
+    }
+
     // MARK: Longest event to mirror
 
     /// How `max_duration_minutes` reads. `0` is not zero minutes — it is "no
@@ -22,12 +81,12 @@ public enum SourceFieldRules {
     /// Why a maximum cannot be saved, or nil.
     ///
     /// A maximum below the minimum is a window nothing can satisfy, so the
-    /// source would mirror nothing at all — silently, since every event simply
+    /// source would mirror no timed events — silently, since each timed event simply
     /// fails the filter. `ConfigLoader.validate` rejects it too; this is the
     /// same rule, said in front of the field.
     public static func maxDurationProblem(max: Int, min: Int) -> String? {
         guard max > 0, max < min else { return nil }
-        return "A longest of \(max) min is below the shortest of \(min) min, so nothing would be mirrored."
+        return "A longest of \(max) min is below the shortest of \(min) min, so no timed event can pass."
     }
 
     // MARK: Gap between merged events

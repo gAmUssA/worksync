@@ -366,30 +366,26 @@ struct SettingsView: View {
         // Only titles that name one calendar: a title shared by two resolves to
         // neither, so offering it would be the hard sync error this popup exists
         // to prevent.
-        let calendars = model.selectableCalendarChoices(inAccount: targetAccount, writableOnly: true)
+        let calendars = model.targetCalendarChoices(for: source)
         let problem = model.calendarTitleProblem(
             source.targetCalendar, inAccount: targetAccount
-        )
+        ) ?? model.feedbackLoopProblem
 
         Picker("Write blockers to", selection: Binding(
-            get: { source.targetCalendar },
+            get: { SourceFieldRules.pickerSelection(source.targetCalendar, choices: calendars) },
             set: { value in model.updateSource(handle) { $0.targetCalendar = value } }
         )) {
-            Text(SourceFieldRules.targetCalendarDescription(
-                SourceFieldRules.inheritedTargetCalendar, inheriting: inherited
-            ))
-            .tag(SourceFieldRules.inheritedTargetCalendar)
-
-            // A saved value the list cannot offer stays in it, so the picker
-            // cannot silently rewrite config to something the user never chose.
-            // Two reasons it might not be offered, and they read differently.
-            if !source.targetCalendar.isEmpty, !calendars.contains(source.targetCalendar) {
-                Text(problem == nil
-                    ? "\(source.targetCalendar) (not found)"
-                    : "\(source.targetCalendar) (name used twice)"
-                ).tag(source.targetCalendar)
+            // Preserve an invalid saved value visibly, but do not offer it as
+            // a selectable destination. This also handles unsafe inheritance.
+            if !calendars.contains(where: { Resolver.namesMatch($0, source.targetCalendar) }) {
+                Text(SourceFieldRules.targetCalendarDescription(source.targetCalendar, inheriting: inherited)
+                    + (problem == nil ? " (not found)" : " (unavailable)"))
+                    .tag(source.targetCalendar)
+                    .disabled(true)
             }
-            ForEach(calendars, id: \.self) { Text($0).tag($0) }
+            ForEach(calendars, id: \.self) { title in
+                Text(SourceFieldRules.targetCalendarDescription(title, inheriting: inherited)).tag(title)
+            }
         }
         .font(.callout)
 
@@ -631,19 +627,25 @@ struct SettingsView: View {
             Text("No calendars available — grant calendar access first.")
                 .font(.caption).foregroundStyle(.secondary)
         } else {
-            Picker("Account", selection: account) {
+            Picker("Account", selection: Binding(
+                get: { SourceFieldRules.pickerSelection(account.wrappedValue, choices: accounts) },
+                set: { account.wrappedValue = $0 }
+            )) {
                 // The saved value may name an account that no longer exists;
                 // keeping it in the list stops the picker silently rewriting
                 // config to something the user never chose.
-                if !accounts.contains(account.wrappedValue) {
+                if !accounts.contains(where: { Resolver.namesMatch($0, account.wrappedValue) }) {
                     Text("\(account.wrappedValue) (not found)").tag(account.wrappedValue)
                 }
                 ForEach(accounts, id: \.self) { Text($0).tag($0) }
             }
             .font(.callout)
 
-            Picker("Calendar", selection: calendar) {
-                if !calendars.contains(calendar.wrappedValue) {
+            Picker("Calendar", selection: Binding(
+                get: { SourceFieldRules.pickerSelection(calendar.wrappedValue, choices: calendars) },
+                set: { calendar.wrappedValue = $0 }
+            )) {
+                if !calendars.contains(where: { Resolver.namesMatch($0, calendar.wrappedValue) }) {
                     Text(problem == nil
                         ? "\(calendar.wrappedValue) (not found)"
                         : "\(calendar.wrappedValue) (name used twice)"
