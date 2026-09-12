@@ -243,7 +243,10 @@ public enum ConfigWriter {
     /// escapes (including Unicode). Use the loader's parser for both forms.
     private static func unquote(_ raw: String) -> String? {
         let table = try? TOMLTable(string: "id = \(raw)")
-        return table?["id"]?.string
+        guard let decoded = table?["id"]?.string else { return nil }
+        // Matching must use the same canonical ID as loading. Invalid IDs
+        // cannot come from an accepted config, so do not match such a block.
+        return try? ConfigLoader.normalizedSourceID(decoded)
     }
 
     // MARK: Field diffs

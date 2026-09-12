@@ -171,6 +171,14 @@ final class ConfigWriterTests: XCTestCase {
         try assertSourceIDPreserved(#""\u0070ersonal""#, expectedID: "personal")
     }
 
+    func testSpacePaddedSourceIDPreservesBlockWhenAnotherFieldChanges() throws {
+        try assertSourceIDPreserved(#"" personal ""#, expectedID: "personal")
+    }
+
+    func testTabNewlinePaddedSourceIDPreservesBlockWhenAnotherFieldChanges() throws {
+        try assertSourceIDPreserved(#""\t\npersonal\r\n\t""#, expectedID: "personal")
+    }
+
     // MARK: Hand-wrapped arrays
 
     /// A user who lists more than two or three entries wraps the array, and
