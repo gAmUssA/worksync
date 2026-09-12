@@ -368,7 +368,7 @@ struct SettingsView: View {
         // to prevent.
         let calendars = model.selectableCalendarChoices(inAccount: targetAccount, writableOnly: true)
         let problem = model.calendarTitleProblem(
-            source.targetCalendar, inAccount: targetAccount, writableOnly: true
+            source.targetCalendar, inAccount: targetAccount
         )
 
         Picker("Write blockers to", selection: Binding(
@@ -624,7 +624,7 @@ struct SettingsView: View {
             inAccount: account.wrappedValue, writableOnly: writableOnly
         )
         let problem = model.calendarTitleProblem(
-            calendar.wrappedValue, inAccount: account.wrappedValue, writableOnly: writableOnly
+            calendar.wrappedValue, inAccount: account.wrappedValue
         )
 
         if accounts.isEmpty {

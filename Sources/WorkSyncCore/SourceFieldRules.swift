@@ -6,9 +6,10 @@ import Foundation
 /// editor does: the menu bar target has no test harness, so anything with a
 /// decision in it is unreachable by tests once it is written as SwiftUI.
 ///
-/// Each of these refuses at the field. `ConfigLoader.validate` throws on the
-/// same inputs, but that error names a config key and arrives at save time, long
-/// after the click that caused it.
+/// Duration-window and all-seven-days refusals are also enforced by
+/// `ConfigLoader.validate`. Coalescing-gap applicability is UI guidance, not a
+/// validation error. Calendar ambiguity uses the loaded calendar list before
+/// save and is enforced by `Resolver` at sync time, not by config validation.
 public enum SourceFieldRules {
     // MARK: Longest event to mirror
 
@@ -72,6 +73,19 @@ public enum SourceFieldRules {
 
     // MARK: Calendar titles a config can name
 
+    /// Calendar choices used by the settings picker.
+    public static func selectableCalendarChoices(
+        in calendars: [CalendarRef], account: String, writableOnly: Bool
+    ) -> [String] {
+        let accountCalendars = Resolver.calendars(inAccount: account, among: calendars)
+        let titles = accountCalendars.map(\.title)
+        // Resolution counts every match before writability can limit the picker.
+        return accountCalendars.filter { candidate in
+            matchingTitleCount(candidate.title, among: titles) == 1
+                && (!writableOnly || candidate.allowsModifications)
+        }.map(\.title).sorted()
+    }
+
     /// Titles that name exactly one calendar in `titles`.
     ///
     /// Config stores a calendar by title, and `Resolver.find` refuses a title
@@ -85,26 +99,26 @@ public enum SourceFieldRules {
     /// stop offering the ones that cannot be resolved rather than to store
     /// something else.
     public static func unambiguousTitles(among titles: [String]) -> [String] {
-        var counts: [String: Int] = [:]
-        for title in titles {
-            counts[title, default: 0] += 1
-        }
-        return titles.filter { counts[$0] == 1 }
+        titles.filter { matchingTitleCount($0, among: titles) == 1 }
     }
 
-    /// Titles in `titles` that name more than one calendar.
+    /// Original spellings of titles that match more than one calendar under
+    /// `Resolver`'s comparison. This set is for display, not exact membership checks.
     public static func ambiguousTitles(among titles: [String]) -> Set<String> {
-        var counts: [String: Int] = [:]
-        for title in titles {
-            counts[title, default: 0] += 1
-        }
-        return Set(counts.filter { $0.value > 1 }.keys)
+        Set(titles.filter { matchingTitleCount($0, among: titles) > 1 })
     }
 
-    /// Why a chosen calendar title cannot be used, or nil.
+    private static func matchingTitleCount(_ title: String, among titles: [String]) -> Int {
+        titles.filter { Resolver.namesMatch($0, title) }.count
+    }
+
+    /// Why a chosen calendar title is ambiguous, or nil. Supply every calendar
+    /// title in the resolver's account scope, including read-only calendars.
+    /// Missing calendars and other resolution failures remain resolver checks.
     public static func calendarTitleProblem(_ title: String, among titles: [String]) -> String? {
-        guard !title.isEmpty, ambiguousTitles(among: titles).contains(title) else { return nil }
-        let count = titles.filter { $0 == title }.count
+        guard !title.isEmpty else { return nil }
+        let count = matchingTitleCount(title, among: titles)
+        guard count > 1 else { return nil }
         return "“\(title)” is the name of \(count) calendars in this account, so the sync cannot tell which one you mean. Rename one of them in Calendar."
     }
 

@@ -521,15 +521,7 @@ extension MenuBarModel {
     }
 
     func calendarChoices(inAccount account: String) -> [String] {
-        availableCalendars
-            .filter { $0.accountTitle.caseInsensitiveCompare(account) == .orderedSame }
-            .map(\.title)
-            .sorted()
-    }
-
-    func writableCalendarChoices(inAccount account: String) -> [String] {
-        availableCalendars
-            .filter { $0.accountTitle.caseInsensitiveCompare(account) == .orderedSame && $0.allowsModifications }
+        Resolver.calendars(inAccount: account, among: availableCalendars)
             .map(\.title)
             .sorted()
     }
@@ -540,21 +532,17 @@ extension MenuBarModel {
     /// refuses it — so offering it would be a popup that can be wrong, which is
     /// the one thing a popup is here to prevent (SPEC §11.1).
     func selectableCalendarChoices(inAccount account: String, writableOnly: Bool) -> [String] {
-        SourceFieldRules.unambiguousTitles(
-            among: writableOnly
-                ? writableCalendarChoices(inAccount: account)
-                : calendarChoices(inAccount: account)
+        SourceFieldRules.selectableCalendarChoices(
+            in: availableCalendars, account: account, writableOnly: writableOnly
         )
     }
 
     /// Why the calendar `title` cannot be used in `account`, or nil. Empty while
     /// the calendar list is still loading, since nothing is known to collide.
-    func calendarTitleProblem(_ title: String, inAccount account: String, writableOnly: Bool) -> String? {
+    func calendarTitleProblem(_ title: String, inAccount account: String) -> String? {
         SourceFieldRules.calendarTitleProblem(
             title,
-            among: writableOnly
-                ? writableCalendarChoices(inAccount: account)
-                : calendarChoices(inAccount: account)
+            among: calendarChoices(inAccount: account)
         )
     }
 
@@ -980,8 +968,9 @@ extension MenuBarModel {
     /// The form refuses each of these at the control — the seventh day will not
     /// switch on, and a maximum below the minimum shows its reason under the
     /// stepper — so this is the backstop that keeps a bad combination from
-    /// reaching `ConfigLoader.validate`, where the error would name a config key
-    /// instead of the field.
+    /// reaching save without a field-specific explanation. Duration and weekday
+    /// rules also live in `ConfigLoader.validate`; calendar ambiguity uses the
+    /// loaded enumeration here and is enforced by `Resolver` during sync.
     var sourceFieldProblem: String? {
         guard let config = editingConfig else { return nil }
         for source in config.sources {
@@ -994,18 +983,18 @@ extension MenuBarModel {
                 return "“\(source.id)”: \(problem)"
             }
             if let problem = calendarTitleProblem(
-                source.calendar, inAccount: source.account, writableOnly: false
+                source.calendar, inAccount: source.account
             ) {
                 return "“\(source.id)”: \(problem)"
             }
             if let problem = calendarTitleProblem(
-                source.targetCalendar, inAccount: config.target.account, writableOnly: true
+                source.targetCalendar, inAccount: config.target.account
             ) {
                 return "“\(source.id)” writes to \(problem)"
             }
         }
         if let problem = calendarTitleProblem(
-            config.target.calendar, inAccount: config.target.account, writableOnly: true
+            config.target.calendar, inAccount: config.target.account
         ) {
             return "Target calendar: \(problem)"
         }

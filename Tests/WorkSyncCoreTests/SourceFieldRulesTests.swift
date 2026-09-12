@@ -188,6 +188,71 @@ final class SourceFieldRulesTests: XCTestCase {
         )
     }
 
+    func testCaseVariantTitlesAgreeWithResolverAndPicker() {
+        let calendars = [
+            CalendarRef(id: "1", title: "Work", accountTitle: "iCloud", allowsModifications: true),
+            CalendarRef(id: "2", title: "work", accountTitle: "ICLOUD", allowsModifications: true),
+        ]
+        let titles = calendars.map(\.title)
+        XCTAssertTrue(SourceFieldRules.unambiguousTitles(among: titles).isEmpty)
+        XCTAssertEqual(SourceFieldRules.ambiguousTitles(among: titles), ["Work", "work"])
+        for title in ["Work", "work", "WORK"] {
+            XCTAssertNotNil(SourceFieldRules.calendarTitleProblem(title, among: titles))
+            assertResolverAmbiguous(title, calendars: calendars)
+        }
+        for writableOnly in [false, true] {
+            XCTAssertTrue(SourceFieldRules.selectableCalendarChoices(
+                in: calendars, account: "icloud", writableOnly: writableOnly
+            ).isEmpty)
+        }
+    }
+
+    func testReadOnlyDuplicateStillMakesWritableChoiceAmbiguous() {
+        let calendars = [
+            CalendarRef(id: "1", title: "Work", accountTitle: "iCloud", allowsModifications: true),
+            CalendarRef(id: "2", title: "Work", accountTitle: "iCloud", allowsModifications: false),
+        ]
+        XCTAssertTrue(SourceFieldRules.selectableCalendarChoices(
+            in: calendars, account: "iCloud", writableOnly: true
+        ).isEmpty)
+        XCTAssertNotNil(SourceFieldRules.calendarTitleProblem("Work", among: calendars.map(\.title)))
+        assertResolverAmbiguous("Work", calendars: calendars)
+    }
+
+    func testUniqueChoicesKeepWritabilityAndAccountScope() throws {
+        let calendars = [
+            CalendarRef(id: "1", title: "Work", accountTitle: "iCloud", allowsModifications: true),
+            CalendarRef(id: "2", title: "Home", accountTitle: "ICLOUD", allowsModifications: false),
+            CalendarRef(id: "3", title: "Work", accountTitle: "Other", allowsModifications: true),
+        ]
+        XCTAssertEqual(SourceFieldRules.selectableCalendarChoices(
+            in: calendars, account: "icloud", writableOnly: true
+        ), ["Work"])
+        XCTAssertEqual(SourceFieldRules.selectableCalendarChoices(
+            in: calendars, account: "icloud", writableOnly: false
+        ), ["Home", "Work"])
+        let config = Config(
+            general: GeneralConfig(), target: TargetConfig(account: "icloud", calendar: "WORK"),
+            sources: [SourceConfig(id: "home", account: "icloud", calendar: "home")]
+        )
+        XCTAssertNoThrow(try Resolver.resolve(config: config, calendars: calendars))
+    }
+
+    private func assertResolverAmbiguous(
+        _ title: String,
+        calendars: [CalendarRef],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let config = Config(
+            general: GeneralConfig(), target: TargetConfig(account: "icloud", calendar: title),
+            sources: [SourceConfig(id: "test", account: "icloud", calendar: title)]
+        )
+        XCTAssertTrue(Resolver.resolveAll(config: config, calendars: calendars).problems.contains(
+            .ambiguous(account: "icloud", calendar: title, count: 2)
+        ), file: file, line: line)
+    }
+
     // MARK: Where this source's blockers are written
 
     /// Empty means "wherever `[target]` points", which a blank row in a popup
