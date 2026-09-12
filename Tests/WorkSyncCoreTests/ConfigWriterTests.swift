@@ -220,6 +220,7 @@ final class ConfigWriterTests: XCTestCase {
     /// a silent fall back to full serialization shows up.
     private func saveFixture(
         _ fixture: String,
+        sourceOrigins: [String: String]? = nil,
         mutate: (inout Config) -> Void
     ) throws -> (text: String, outcome: ConfigWriteOutcome, config: Config) {
         let directory = NSTemporaryDirectory() + "worksync-writer-\(UUID().uuidString)"
@@ -230,7 +231,7 @@ final class ConfigWriterTests: XCTestCase {
 
         var updated = try ConfigLoader.parse(fixture)
         mutate(&updated)
-        let outcome = try ConfigWriter.save(updated, to: path)
+        let outcome = try ConfigWriter.save(updated, to: path, sourceOrigins: sourceOrigins)
         return try (String(contentsOfFile: path, encoding: .utf8), outcome, updated)
     }
 
@@ -501,10 +502,131 @@ final class ConfigWriterTests: XCTestCase {
     }
 
     func testRenamingASourceIDRewritesItsBlock() throws {
-        let (text, expected) = try rewrite { $0.sources[0].id = "home" }
+        let (text, outcome, expected) = try saveFixture(
+            original
+        ) { $0.sources[0].id = "home" }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(text, original.replacingOccurrences(of: "id = \"personal\"", with: "id = \"home\""))
         let reloaded = try ConfigLoader.parse(text)
         XCTAssertEqual(reloaded, expected)
         XCTAssertEqual(reloaded.sources.map(\.id), ["home", "travel"])
+    }
+
+    private static let renameFixture = """
+    [target]
+    account = "Work"
+    calendar = "Calendar"
+
+    [[source]]
+    # Personal block documentation.
+    id = "personal"
+    account = "iCloud"
+    calendar = "Personal"
+
+    title_template = "Busy"
+
+    [[source]]
+    # Travel block documentation.
+    id = "travel"
+    account = "iCloud"
+    calendar = "Travel"
+    title_template = "Away"
+    """
+
+    func testRenamePreservesSourceBlockText() throws {
+        let fixture = Self.renameFixture
+        let (text, outcome, expected) = try saveFixture(
+            fixture, sourceOrigins: ["home": "personal", "travel": "travel"]
+        ) { $0.sources[0].id = "home" }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertEqual(text, fixture.replacingOccurrences(of: "id = \"personal\"", with: "id = \"home\""))
+    }
+
+    func testSwapIDsKeepsEachSourcesOwnBlock() throws {
+        let fixture = Self.renameFixture
+        let (text, outcome, expected) = try saveFixture(
+            fixture, sourceOrigins: ["travel": "personal", "personal": "travel"]
+        ) {
+            $0.sources[0].id = "travel"
+            $0.sources[1].id = "personal"
+        }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        let swapped = fixture
+            .replacingOccurrences(of: "id = \"personal\"", with: "id = \"temporary\"")
+            .replacingOccurrences(of: "id = \"travel\"", with: "id = \"personal\"")
+            .replacingOccurrences(of: "id = \"temporary\"", with: "id = \"travel\"")
+        XCTAssertEqual(text, swapped)
+    }
+
+    func testRenameToRemovedSourcesIDKeepsRenamedBlock() throws {
+        let fixture = Self.renameFixture
+        let (text, outcome, expected) = try saveFixture(fixture, sourceOrigins: ["travel": "personal"]) {
+            $0.sources.removeLast()
+            $0.sources[0].id = "travel"
+        }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertTrue(text.contains("# Personal block documentation."))
+        XCTAssertFalse(text.contains("# Travel block documentation."))
+    }
+
+    func testNewSourceReusingRemovedIDDoesNotInheritOldBlock() throws {
+        let (text, outcome, expected) = try saveFixture(
+            Self.renameFixture, sourceOrigins: ["travel": "travel"]
+        ) {
+            $0.sources.removeFirst()
+            $0.sources.insert(SourceConfig(id: "personal", account: "Other", calendar: "Other"), at: 0)
+        }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertFalse(text.contains("# Personal block documentation."))
+        XCTAssertTrue(text.contains("# Travel block documentation."))
+    }
+
+    func testRenameAndReorderPreservesSourceOrderAndComments() throws {
+        let (text, outcome, expected) = try saveFixture(
+            Self.renameFixture, sourceOrigins: ["home": "personal", "travel": "travel"]
+        ) {
+            $0.sources[0].id = "home"
+            $0.sources[0].account = "Changed account"
+            $0.sources.reverse()
+        }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertEqual(expected.sources.map(\.id), ["travel", "home"])
+        let travel = try XCTUnwrap(text.range(of: "# Travel block documentation."))
+        let personal = try XCTUnwrap(text.range(of: "# Personal block documentation."))
+        XCTAssertLessThan(travel.lowerBound, personal.lowerBound)
+    }
+
+    func testMatchingOtherSourcesFieldsDoesNotMoveComments() throws {
+        let fixture = Self.renameFixture
+        let (text, outcome, expected) = try saveFixture(fixture) {
+            $0.sources[0].calendar = "Travel"
+            $0.sources[0].titleTemplate = "Away"
+        }
+        XCTAssertEqual(outcome, .preserved)
+        XCTAssertEqual(try ConfigLoader.parse(text), expected)
+        XCTAssertEqual(
+            text,
+            fixture
+                .replacingOccurrences(of: "calendar = \"Personal\"", with: "calendar = \"Travel\"")
+                .replacingOccurrences(of: "title_template = \"Busy\"", with: "title_template = \"Away\"")
+        )
+    }
+
+    func testRenameCollisionLeavesOriginalFileUntouched() throws {
+        let directory = NSTemporaryDirectory() + "worksync-collision-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let path = directory + "/config.toml"
+        try Self.renameFixture.write(toFile: path, atomically: true, encoding: .utf8)
+        var config = try ConfigLoader.parse(Self.renameFixture)
+        config.sources[0].id = "travel"
+        XCTAssertThrowsError(try ConfigWriter.save(config, to: path))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), Self.renameFixture)
     }
 
     // MARK: Value formatting
