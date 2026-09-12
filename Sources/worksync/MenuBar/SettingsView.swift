@@ -230,11 +230,11 @@ struct SettingsView: View {
                 calendarPickers(
                     account: Binding(
                         get: { source.account },
-                        set: { model.editingConfig?.sources[index].account = $0 }
+                        set: { value in model.updateSource(source.id) { $0.account = value } }
                     ),
                     calendar: Binding(
                         get: { source.calendar },
-                        set: { model.editingConfig?.sources[index].calendar = $0 }
+                        set: { value in model.updateSource(source.id) { $0.calendar = value } }
                     ),
                     writableOnly: false
                 )
@@ -242,7 +242,7 @@ struct SettingsView: View {
                 LabeledContent("Shown as") {
                     TextField("Busy", text: Binding(
                         get: { source.titleTemplate },
-                        set: { model.editingConfig?.sources[index].titleTemplate = $0 }
+                        set: { value in model.updateSource(source.id) { $0.titleTemplate = value } }
                     ))
                     .textFieldStyle(.roundedBorder)
                 }
@@ -250,37 +250,37 @@ struct SettingsView: View {
 
                 stepper("Pad before", value: Binding(
                     get: { source.paddingBeforeMinutes },
-                    set: { model.editingConfig?.sources[index].paddingBeforeMinutes = $0 }
+                    set: { value in model.updateSource(source.id) { $0.paddingBeforeMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 stepper("Pad after", value: Binding(
                     get: { source.paddingAfterMinutes },
-                    set: { model.editingConfig?.sources[index].paddingAfterMinutes = $0 }
+                    set: { value in model.updateSource(source.id) { $0.paddingAfterMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 stepper("Ignore shorter than", value: Binding(
                     get: { source.minDurationMinutes },
-                    set: { model.editingConfig?.sources[index].minDurationMinutes = $0 }
+                    set: { value in model.updateSource(source.id) { $0.minDurationMinutes = value } }
                 ), range: 0 ... 480, suffix: "min")
 
                 Toggle("Merge nearby events", isOn: Binding(
                     get: { source.coalesce },
-                    set: { model.editingConfig?.sources[index].coalesce = $0 }
+                    set: { value in model.updateSource(source.id) { $0.coalesce = value } }
                 )).font(.callout)
 
                 Toggle("Include all-day events", isOn: Binding(
                     get: { source.includeAllDay },
-                    set: { model.editingConfig?.sources[index].includeAllDay = $0 }
+                    set: { value in model.updateSource(source.id) { $0.includeAllDay = value } }
                 )).font(.callout)
 
                 Toggle("Skip when work is already busy", isOn: Binding(
                     get: { source.skipIfWorkBusy },
-                    set: { model.editingConfig?.sources[index].skipIfWorkBusy = $0 }
+                    set: { value in model.updateSource(source.id) { $0.skipIfWorkBusy = value } }
                 )).font(.callout)
 
                 picker("Shows as", selection: Binding(
                     get: { source.availability },
-                    set: { model.editingConfig?.sources[index].availability = $0 }
+                    set: { value in model.updateSource(source.id) { $0.availability = value } }
                 ), options: Availability.allCases, label: \.rawValue)
 
                 Divider()
@@ -293,8 +293,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                titleFilterEditor(.matches, sourceIndex: index, entries: source.titleMatches)
-                titleFilterEditor(.excludes, sourceIndex: index, entries: source.titleExcludes)
+                titleFilterEditor(.matches, sourceID: source.id, entries: source.titleMatches)
+                titleFilterEditor(.excludes, sourceID: source.id, entries: source.titleExcludes)
             }
         }
     }
@@ -307,7 +307,7 @@ struct SettingsView: View {
     /// error names a config key at a moment far away from the keystroke.
     private func titleFilterEditor(
         _ field: TitleFilterField,
-        sourceIndex index: Int,
+        sourceID: String,
         entries: [String]
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -316,14 +316,17 @@ struct SettingsView: View {
             ForEach(entries.indices, id: \.self) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
+                        // Both halves resolve safely: a row can vanish while
+                        // its field is still resigning focus, and the setter
+                        // used to subscript the index the row was built with.
                         TextField("", text: Binding(
                             get: { row < entries.count ? entries[row] : "" },
-                            set: { model.editingConfig?.sources[index][keyPath: field.keyPath][row] = $0 }
+                            set: { model.setTitleFilterEntry($0, field, of: sourceID, at: row) }
                         ))
                         .textFieldStyle(.roundedBorder)
 
                         Button {
-                            model.removeTitleFilter(field, fromSourceAt: index, at: row)
+                            model.removeTitleFilter(field, from: sourceID, at: row)
                         } label: {
                             Image(systemName: "minus")
                         }
@@ -348,19 +351,19 @@ struct SettingsView: View {
                     set: { model.setTitleFilterDraft(field, to: $0) }
                 ))
                 .textFieldStyle(.roundedBorder)
-                .onSubmit { model.addTitleFilter(field, toSourceAt: index) }
+                .onSubmit { model.addTitleFilter(field, to: sourceID) }
 
                 Button {
-                    model.addTitleFilter(field, toSourceAt: index)
+                    model.addTitleFilter(field, to: sourceID)
                 } label: {
                     Image(systemName: "plus")
                 }
-                .disabled(!isAddable(model.titleFilterDraftCheck(field, ofSourceAt: index)))
+                .disabled(!isAddable(model.titleFilterDraftCheck(field, of: sourceID)))
                 .accessibilityLabel("Add entry")
             }
 
             if let message = TitleFilterEntry.message(
-                for: model.titleFilterDraftCheck(field, ofSourceAt: index)
+                for: model.titleFilterDraftCheck(field, of: sourceID)
             ) {
                 Text(message).font(.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)

@@ -83,6 +83,63 @@ public enum TitleFilterEntry {
         return entries + [candidate]
     }
 
+    // MARK: Editing one source's list, by identity
+
+    /// `sources` with `text` added to one source's list, or nil when nothing
+    /// changes — the source is gone, or the text is not addable.
+    ///
+    /// Resolved by id rather than by an index. A SwiftUI row hands back the
+    /// index it was built with, and that index is stale the moment a source is
+    /// added, removed, or reordered; subscripting with it traps, which is a
+    /// crash rather than a missed edit. Identity does not go stale, and a
+    /// source that is no longer there simply yields nil.
+    public static func adding(
+        _ text: String,
+        to list: WritableKeyPath<SourceConfig, [String]>,
+        ofSourceWith id: String,
+        in sources: [SourceConfig]
+    ) -> [SourceConfig]? {
+        guard let index = sources.firstIndex(where: { $0.id == id }),
+              let entries = adding(text, to: sources[index][keyPath: list]) else { return nil }
+        var updated = sources
+        updated[index][keyPath: list] = entries
+        return updated
+    }
+
+    /// `sources` with one row removed from a source's list, or nil when the
+    /// source is gone or the row is out of range.
+    public static func removing(
+        at row: Int,
+        from list: WritableKeyPath<SourceConfig, [String]>,
+        ofSourceWith id: String,
+        in sources: [SourceConfig]
+    ) -> [SourceConfig]? {
+        guard let index = sources.firstIndex(where: { $0.id == id }),
+              sources[index][keyPath: list].indices.contains(row) else { return nil }
+        var updated = sources
+        updated[index][keyPath: list].remove(at: row)
+        return updated
+    }
+
+    /// `sources` with one row's text replaced, or nil when the source is gone
+    /// or the row is out of range.
+    ///
+    /// The text is stored as typed; `normalized(_:)` trims it at the save
+    /// commit point, so a space typed mid-word is not eaten while typing.
+    public static func setting(
+        _ text: String,
+        at row: Int,
+        in list: WritableKeyPath<SourceConfig, [String]>,
+        ofSourceWith id: String,
+        in sources: [SourceConfig]
+    ) -> [SourceConfig]? {
+        guard let index = sources.firstIndex(where: { $0.id == id }),
+              sources[index][keyPath: list].indices.contains(row) else { return nil }
+        var updated = sources
+        updated[index][keyPath: list][row] = text
+        return updated
+    }
+
     /// Every entry as it should be stored.
     ///
     /// The add field trims, so a row edited in place has to as well. A saved

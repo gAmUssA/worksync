@@ -107,6 +107,96 @@ final class TitleFilterEntryTests: XCTestCase {
         XCTAssertNoThrow(try ConfigLoader.validate(config))
     }
 
+    // MARK: Editing by identity, not by a captured index
+
+    private func sources() -> [SourceConfig] {
+        var personal = SourceConfig(id: "personal", account: "iCloud", calendar: "Personal")
+        personal.titleMatches = ["1:1"]
+        personal.titleExcludes = ["tentative"]
+        var travel = SourceConfig(id: "travel", account: "Google", calendar: "Travel")
+        travel.titleMatches = ["flight"]
+        return [personal, travel]
+    }
+
+    func testAddingResolvesTheSourceByID() throws {
+        let updated = try XCTUnwrap(
+            TitleFilterEntry.adding("interview", to: \.titleMatches, ofSourceWith: "personal", in: sources())
+        )
+        XCTAssertEqual(updated[0].titleMatches, ["1:1", "interview"])
+        XCTAssertEqual(updated[1].titleMatches, ["flight"], "the other source must not move")
+    }
+
+    /// The crash this shape exists to prevent: the view hands back the index its
+    /// row was built with, and that index is stale the moment a source is added,
+    /// removed, or reordered. An id that no longer resolves is a no-op.
+    func testAddingToASourceThatIsGoneIsANoOp() {
+        XCTAssertNil(TitleFilterEntry.adding("interview", to: \.titleMatches, ofSourceWith: "gone", in: sources()))
+        XCTAssertNil(TitleFilterEntry.adding("interview", to: \.titleMatches, ofSourceWith: "", in: []))
+    }
+
+    func testAddingRefusesABadEntryEvenWhenTheSourceResolves() {
+        XCTAssertNil(TitleFilterEntry.adding("   ", to: \.titleMatches, ofSourceWith: "personal", in: sources()))
+        XCTAssertNil(TitleFilterEntry.adding("1:1", to: \.titleMatches, ofSourceWith: "personal", in: sources()))
+    }
+
+    func testRemovingResolvesTheSourceByID() throws {
+        let updated = try XCTUnwrap(
+            TitleFilterEntry.removing(at: 0, from: \.titleExcludes, ofSourceWith: "personal", in: sources())
+        )
+        XCTAssertEqual(updated[0].titleExcludes, [])
+        XCTAssertEqual(updated[1].titleMatches, ["flight"])
+    }
+
+    func testRemovingWithAStaleRowOrSourceIsANoOp() {
+        // Order matters here: the source has to be resolved before the row is
+        // range-checked, or the row check reads a source that is not there.
+        XCTAssertNil(TitleFilterEntry.removing(at: 0, from: \.titleMatches, ofSourceWith: "gone", in: sources()))
+        XCTAssertNil(TitleFilterEntry.removing(at: 9, from: \.titleMatches, ofSourceWith: "personal", in: sources()))
+        XCTAssertNil(TitleFilterEntry.removing(at: -1, from: \.titleMatches, ofSourceWith: "personal", in: sources()))
+        XCTAssertNil(TitleFilterEntry.removing(at: 0, from: \.titleMatches, ofSourceWith: "travel", in: [sources()[0]]))
+    }
+
+    func testSettingARowResolvesTheSourceByID() throws {
+        let updated = try XCTUnwrap(
+            TitleFilterEntry.setting("lunch", at: 0, in: \.titleMatches, ofSourceWith: "personal", in: sources())
+        )
+        XCTAssertEqual(updated[0].titleMatches, ["lunch"])
+    }
+
+    func testSettingARowStoresTheTextAsTyped() throws {
+        // Trimming happens at the save commit point, so a space typed mid-word
+        // survives while the user is still typing.
+        let updated = try XCTUnwrap(
+            TitleFilterEntry.setting("team ", at: 0, in: \.titleMatches, ofSourceWith: "personal", in: sources())
+        )
+        XCTAssertEqual(updated[0].titleMatches, ["team "])
+    }
+
+    func testSettingWithAStaleRowOrSourceIsANoOp() {
+        XCTAssertNil(TitleFilterEntry.setting("x", at: 0, in: \.titleMatches, ofSourceWith: "gone", in: sources()))
+        XCTAssertNil(TitleFilterEntry.setting("x", at: 5, in: \.titleMatches, ofSourceWith: "personal", in: sources()))
+        XCTAssertNil(TitleFilterEntry.setting("x", at: 0, in: \.titleMatches, ofSourceWith: "personal", in: []))
+    }
+
+    /// The sequence Copilot described: a row's text field commits after the row
+    /// it was built for is gone. Every access must be a no-op, never a trap.
+    func testACommitArrivingAfterTheRowDisappearsChangesNothing() throws {
+        var live = sources()
+        live[0].titleMatches = ["1:1", "interview"]
+        let afterRemoval = try XCTUnwrap(
+            TitleFilterEntry.removing(at: 1, from: \.titleMatches, ofSourceWith: "personal", in: live)
+        )
+        XCTAssertEqual(afterRemoval[0].titleMatches, ["1:1"])
+
+        // The field for the removed row now commits with row 1.
+        XCTAssertNil(
+            TitleFilterEntry.setting("late", at: 1, in: \.titleMatches, ofSourceWith: "personal", in: afterRemoval)
+        )
+        XCTAssertNil(
+            TitleFilterEntry.removing(at: 1, from: \.titleMatches, ofSourceWith: "personal", in: afterRemoval)
+        )
+    }
+
     // MARK: A row emptied in place
 
     /// `check` is right to stay silent on an empty add field — nobody has typed

@@ -663,8 +663,22 @@ extension MenuBarModel {
 
     // MARK: Title filters
 
-    func titleFilterEntries(_ field: TitleFilterField, ofSourceAt index: Int) -> [String] {
-        editingConfig?.sources[index][keyPath: field.keyPath] ?? []
+    /// Applies `change` to the source with `sourceID`, or does nothing if it is
+    /// no longer there.
+    ///
+    /// The view builds its controls around an index, and that index is stale as
+    /// soon as a source is added, removed, or reordered. A control whose commit
+    /// lands after the list changed would subscript with it — and a stale index
+    /// does not misbehave, it traps. Identity does not go stale.
+    func updateSource(_ sourceID: String, _ change: (inout SourceConfig) -> Void) {
+        guard let index = editingConfig?.sources.firstIndex(where: { $0.id == sourceID }) else { return }
+        change(&editingConfig!.sources[index])
+    }
+
+    /// Every title-filter method takes a source id, never the index the view
+    /// built its rows with, for the same reason.
+    func titleFilterEntries(_ field: TitleFilterField, of sourceID: String) -> [String] {
+        editingConfig?.sources.first { $0.id == sourceID }?[keyPath: field.keyPath] ?? []
     }
 
     func titleFilterDraft(_ field: TitleFilterField) -> String {
@@ -675,19 +689,29 @@ extension MenuBarModel {
         titleFilterDrafts.setText(text, field.rawValue, of: selectedSourceID)
     }
 
-    func titleFilterDraftCheck(_ field: TitleFilterField, ofSourceAt index: Int) -> TitleFilterEntry.Check {
-        TitleFilterEntry.check(titleFilterDraft(field), against: titleFilterEntries(field, ofSourceAt: index))
+    func titleFilterDraftCheck(_ field: TitleFilterField, of sourceID: String) -> TitleFilterEntry.Check {
+        TitleFilterEntry.check(titleFilterDraft(field), against: titleFilterEntries(field, of: sourceID))
     }
 
     /// Adds what is in the field's draft. Silent when the draft is not
     /// addable — the button that calls this is disabled in that state, and the
     /// reason is already on screen.
-    func addTitleFilter(_ field: TitleFilterField, toSourceAt index: Int) {
-        guard let entries = TitleFilterEntry.adding(
-            titleFilterDraft(field), to: titleFilterEntries(field, ofSourceAt: index)
-        ) else { return }
-        editingConfig?.sources[index][keyPath: field.keyPath] = entries
+    func addTitleFilter(_ field: TitleFilterField, to sourceID: String) {
+        guard let sources = editingConfig?.sources,
+              let updated = TitleFilterEntry.adding(
+                  titleFilterDraft(field), to: field.keyPath, ofSourceWith: sourceID, in: sources
+              ) else { return }
+        editingConfig?.sources = updated
         titleFilterDrafts.clear(field.rawValue, of: selectedSourceID)
+    }
+
+    /// Rewrites one row as the user types in it.
+    func setTitleFilterEntry(_ text: String, _ field: TitleFilterField, of sourceID: String, at row: Int) {
+        guard let sources = editingConfig?.sources,
+              let updated = TitleFilterEntry.setting(
+                  text, at: row, in: field.keyPath, ofSourceWith: sourceID, in: sources
+              ) else { return }
+        editingConfig?.sources = updated
     }
 
     /// Trims every entry, the way the add field already does.
@@ -706,11 +730,12 @@ extension MenuBarModel {
         editingConfig = config
     }
 
-    func removeTitleFilter(_ field: TitleFilterField, fromSourceAt index: Int, at row: Int) {
-        guard var entries = editingConfig?.sources[index][keyPath: field.keyPath],
-              entries.indices.contains(row) else { return }
-        entries.remove(at: row)
-        editingConfig?.sources[index][keyPath: field.keyPath] = entries
+    func removeTitleFilter(_ field: TitleFilterField, from sourceID: String, at row: Int) {
+        guard let sources = editingConfig?.sources,
+              let updated = TitleFilterEntry.removing(
+                  at: row, from: field.keyPath, ofSourceWith: sourceID, in: sources
+              ) else { return }
+        editingConfig?.sources = updated
     }
 
     /// Why the title filters cannot be saved yet, or nil. Covers both a row
@@ -725,10 +750,9 @@ extension MenuBarModel {
                 }
             }
         }
-        guard let selected = selectedSourceID,
-              let index = config.sources.firstIndex(where: { $0.id == selected }) else { return nil }
+        guard let selected = selectedSourceID else { return nil }
         for field in TitleFilterField.allCases {
-            if let message = TitleFilterEntry.message(for: titleFilterDraftCheck(field, ofSourceAt: index)) {
+            if let message = TitleFilterEntry.message(for: titleFilterDraftCheck(field, of: selected)) {
                 return "\(field.errorLabel): \(message)"
             }
         }
@@ -753,10 +777,9 @@ extension MenuBarModel {
         // Same commit point for the list editors: an entry typed but never
         // added would otherwise vanish with the save that looked like it
         // included it.
-        if let selected = selectedSourceID,
-           let index = editingConfig?.sources.firstIndex(where: { $0.id == selected }) {
+        if let selected = selectedSourceID {
             for field in TitleFilterField.allCases {
-                addTitleFilter(field, toSourceAt: index)
+                addTitleFilter(field, to: selected)
             }
         }
         // A row edited in place never went through `adding`, so this is where
