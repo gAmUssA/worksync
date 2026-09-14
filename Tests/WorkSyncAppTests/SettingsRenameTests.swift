@@ -37,7 +37,7 @@ final class SettingsRenameTests: XCTestCase {
         let (model, _, _) = try await opened()
         let personal = try handle(model, "personal")
 
-        model.setSourceName("home", of: personal)
+        MenuBarFixture.rename(model, personal, to: "home")
         model.addSource()
 
         XCTAssertEqual(model.editingConfig?.sources.count, 3)
@@ -63,7 +63,7 @@ final class SettingsRenameTests: XCTestCase {
         let personal = try handle(model, "personal")
         let travel = try handle(model, "travel")
 
-        model.setSourceName("home", of: personal)
+        MenuBarFixture.rename(model, personal, to: "home")
         model.seedSourceIDDraft(for: travel)
 
         XCTAssertEqual(model.selectedSource, travel)

@@ -30,8 +30,9 @@ final class SettingsSaveTests: XCTestCase {
         let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
         let personal = try handle(model, "personal")
 
-        model.setSourceName("home", of: personal)
-        model.commitSourceName(of: personal)
+        // Answering the purge warning is part of renaming a source the file
+        // holds; `saveSettings` refuses while one is unanswered.
+        MenuBarFixture.rename(model, personal, to: "home")
         model.saveSettings()
 
         let saved = try XCTUnwrap(recorder.savedConfigs.first)
@@ -189,8 +190,7 @@ final class SettingsSaveTests: XCTestCase {
         model.openSettings()
         await model.calendarChoicesTask?.value
         let personal = try handle(model, "personal")
-        model.setSourceName("home", of: personal)
-        model.commitSourceName(of: personal)
+        MenuBarFixture.rename(model, personal, to: "home")
         model.saveSettings()
 
         let written = try String(contentsOfFile: path, encoding: .utf8)

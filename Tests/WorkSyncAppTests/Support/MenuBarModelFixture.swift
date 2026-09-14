@@ -338,6 +338,19 @@ enum MenuBarFixture {
         return made
     }
 
+    /// Renames a source the way the UI does, answering the purge warning.
+    ///
+    /// The live app seeds `savedSourceIDs` from the config file, so every
+    /// source loaded from disk raises the warning on rename. A test that skips
+    /// the confirmation is exercising a state the app cannot be in.
+    static func rename(_ model: MenuBarModel, _ handle: SourceHandle, to newID: String) {
+        model.setSourceName(newID, of: handle)
+        model.commitSourceName(of: handle)
+        if model.pendingRename != nil {
+            model.confirmPendingRename()
+        }
+    }
+
     static let emptyConfig = Config(
         general: GeneralConfig(), target: TargetConfig(account: "Work", calendar: "Calendar"), sources: []
     )

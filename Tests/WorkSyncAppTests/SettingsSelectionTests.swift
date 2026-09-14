@@ -90,8 +90,7 @@ final class SettingsSelectionTests: XCTestCase {
         let (model, _, _) = try await opened()
         let personal = try handle(model, "personal")
 
-        model.setSourceName("home", of: personal)
-        model.commitSourceName(of: personal)
+        MenuBarFixture.rename(model, personal, to: "home")
 
         XCTAssertEqual(model.selectedSourceID, "home")
         XCTAssertEqual(model.source(for: personal)?.calendar, "Personal", "still the same source")
@@ -103,8 +102,7 @@ final class SettingsSelectionTests: XCTestCase {
         let personal = try handle(model, "personal")
         let travel = try handle(model, "travel")
 
-        model.setSourceName("home", of: personal)
-        model.commitSourceName(of: personal)
+        MenuBarFixture.rename(model, personal, to: "home")
         model.seedSourceIDDraft(for: travel)
         XCTAssertEqual(model.selectedSourceID, "travel")
 
@@ -161,8 +159,7 @@ final class SettingsSelectionTests: XCTestCase {
         let personal = try handle(model, "personal")
 
         model.setTitleFilterDraft(.matches, to: "standup", of: personal)
-        model.setSourceName("home", of: personal)
-        model.commitSourceName(of: personal)
+        MenuBarFixture.rename(model, personal, to: "home")
 
         XCTAssertEqual(model.source(for: personal)?.id, "home", "the rename has to land first")
         XCTAssertEqual(model.titleFilterDraft(.matches, of: personal), "standup")
@@ -214,8 +211,7 @@ final class SettingsSelectionTests: XCTestCase {
         let (model, _, _) = try await opened()
         let personal = try handle(model, "personal")
 
-        model.setSourceName("home", of: personal)
-        model.commitSourceName(of: personal)
+        MenuBarFixture.rename(model, personal, to: "home")
 
         XCTAssertEqual(model.source(for: personal)?.id, "home")
         XCTAssertEqual(model.selectedSourceID, "home")

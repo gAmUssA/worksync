@@ -77,6 +77,11 @@ final class MenuBarModel {
     /// The file changed under a form that has unsaved edits. Surfaced rather
     /// than resolved: the edits are the user's, and so is the choice.
     var configChangedOnDisk = false
+
+    /// Why the last reload could not be read, for the settings screen to show.
+    /// Separate from `configError`, which nothing on this screen renders — an
+    /// error the user cannot see is one that was swallowed.
+    var settingsReloadError: String?
     /// The id field's text while it is being edited, held apart from
     /// `editingConfig` so a rename is judged once on commit rather than on
     /// every keystroke.
@@ -476,6 +481,13 @@ extension MenuBarModel {
             editingConfig = config
             settingsBaseline = config
             configChangedOnDisk = false
+            settingsReloadError = nil
+            // The file's ids ARE the saved ids: they are what the sync timer
+            // writes blockers under. Leaving this at the set captured when the
+            // process started makes `SourceRenamePolicy.needsWarning` treat a
+            // live source as one no event can carry, skipping the purge
+            // warning (SPEC §4.1).
+            savedSourceIDs = Set(config.sources.map(\.id))
             sourceHandles.seed(config.sources.map(\.id))
             sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
             configError = nil
@@ -511,9 +523,13 @@ extension MenuBarModel {
             // The form is holding the user's work; emptying it because the file
             // is momentarily unparseable would destroy more than it protects.
             configError = error.localizedDescription
+            settingsReloadError = "config.toml could not be re-read, so this form may be "
+                + "out of date. Your unsaved changes are still here.\n\n"
+                + error.localizedDescription
             return
         }
         configError = nil
+        settingsReloadError = nil
 
         // Nothing moved. Reseeding here would clear the selection and any
         // half-typed draft on every panel open.
@@ -538,6 +554,10 @@ extension MenuBarModel {
         editingConfig = config
         settingsBaseline = config
         configChangedOnDisk = false
+        settingsReloadError = nil
+        // Same reason as in `openSettings`: the warning that protects blockers
+        // from being orphaned reads this set.
+        savedSourceIDs = Set(config.sources.map(\.id))
         sourceHandles.seed(config.sources.map(\.id))
         sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
         sourceNameDraft.removeAll()
@@ -559,6 +579,7 @@ extension MenuBarModel {
         editingConfig = nil
         settingsBaseline = nil
         configChangedOnDisk = false
+        settingsReloadError = nil
         sourceOrigins = [:]
         pendingRename = nil
         sourceNameDraft.removeAll()

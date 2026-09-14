@@ -21,6 +21,9 @@ struct SettingsView: View {
             } else if model.editingConfig != nil {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        if let reloadError = model.settingsReloadError {
+                            reloadErrorNotice(reloadError)
+                        }
                         if model.configChangedOnDisk {
                             externalChangeNotice
                         }
@@ -553,6 +556,20 @@ struct SettingsView: View {
         }
         .font(.caption)
         .foregroundStyle(.orange)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The file could not be re-read when the panel reopened. The form still
+    /// holds the user's work, so this explains why what is on screen may not
+    /// match the file rather than taking anything away.
+    private func reloadErrorNotice(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.octagon")
+            Text(message)
+        }
+        .font(.caption)
+        .foregroundStyle(.red)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }

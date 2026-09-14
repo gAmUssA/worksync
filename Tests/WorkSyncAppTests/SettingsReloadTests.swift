@@ -101,6 +101,91 @@ final class SettingsReloadTests: XCTestCase {
             model.editingConfig,
             "a broken file must not empty a form that is holding the user's work"
         )
-        XCTAssertNotNil(model.configError, "and the breakage is reported, not swallowed")
+        // Asserting `configError` alone would prove nothing: nothing in the UI
+        // renders it. The settings screen needs its own message, or the failure
+        // is silent to the person looking at the form.
+        let notice = try XCTUnwrap(
+            model.settingsReloadError,
+            "a reload failure the user cannot see is a swallowed error"
+        )
+        XCTAssertTrue(
+            notice.contains("unbalanced quote on line 4"),
+            "the notice carries the parser's reason, not a generic apology: \(notice)"
+        )
+    }
+
+    func testASuccessfulReloadClearsAnEarlierReloadError() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        recorder.configError = ConfigError.parseFailure("unbalanced quote")
+        model.panelWillAppear()
+        XCTAssertNotNil(model.settingsReloadError)
+
+        recorder.configError = nil
+        var fixed = try MenuBarFixture.twoSources()
+        fixed.sources[0].titleExcludes = ["lunch"]
+        recorder.config = fixed
+        model.panelWillAppear()
+
+        XCTAssertNil(model.settingsReloadError, "a fixed file must not keep showing the old failure")
+        XCTAssertEqual(model.editingConfig?.sources.first?.titleExcludes, ["lunch"])
+    }
+
+    // MARK: The saved-id set the purge warning depends on
+
+    /// `savedSourceIDs` means "ids the config file holds", which is what
+    /// decides whether renaming one can orphan blockers. A reload changes the
+    /// file's ids, so leaving the set behind skips the warning for a live
+    /// source.
+    func testAdoptingAReloadedConfigRefreshesTheSavedIDs() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["personal", "travel"]
+        )
+
+        var renamedOnDisk = try MenuBarFixture.twoSources()
+        renamedOnDisk.sources[0].id = "home"
+        recorder.config = renamedOnDisk
+        model.panelWillAppear()
+
+        XCTAssertEqual(
+            model.savedSourceIDs, ["home", "travel"],
+            "the file's ids are the saved ids once the form has adopted the file"
+        )
+    }
+
+    func testRenamingASourceTheFileHoldsStillWarns() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["personal", "travel"]
+        )
+
+        var renamedOnDisk = try MenuBarFixture.twoSources()
+        renamedOnDisk.sources[0].id = "home"
+        recorder.config = renamedOnDisk
+        model.panelWillAppear()
+
+        let handle = try XCTUnwrap(model.handle(of: "home"))
+        model.selectedSource = handle
+        model.setSourceName("house", of: handle)
+        _ = model.commitSourceIDDraft()
+
+        XCTAssertNotNil(
+            model.pendingRename,
+            "the sync timer writes blockers under whatever the file says, so renaming "
+                + "away from it must still warn about orphans"
+        )
+    }
+
+    func testOpeningSettingsAlsoRefreshesTheSavedIDs() throws {
+        // The same staleness on the pre-existing path: openSettings reads the
+        // file too, and never updated the set either.
+        let (model, recorder, _) = try MenuBarFixture.model(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["stale"]
+        )
+        var onDisk = try MenuBarFixture.twoSources()
+        onDisk.sources[0].id = "home"
+        recorder.config = onDisk
+
+        model.openSettings()
+
+        XCTAssertEqual(model.savedSourceIDs, ["home", "travel"])
     }
 }
