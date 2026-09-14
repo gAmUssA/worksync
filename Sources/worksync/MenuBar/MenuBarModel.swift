@@ -613,7 +613,7 @@ extension MenuBarModel {
     private func formHasUnsavedInput(against baseline: Config) -> Bool {
         editingConfig != baseline
             || sourceNameDraft.isDirty
-            || titleFilterDrafts.hasTypedText
+            || titleFilterDrafts.hasTypedText(of: selectedSource)
             || pendingRename != nil
     }
 
@@ -1215,13 +1215,18 @@ extension MenuBarModel {
     var unmatchableSourcesProblem: String? {
         guard let onDisk = lastReadSourceIDs else { return nil }
         let origins = Set(sourceOrigins.values)
+        // Measured against what the form loaded, not against the origins,
+        // because removing a source drops its origin on purpose. Comparing
+        // with the origins reports the user's own deletion as a block that
+        // appeared on disk, and the deletion could then never be saved.
+        let loaded = Set((settingsBaseline?.sources ?? []).map(\.id))
 
         // Both directions lose a block. An origin the file dropped cannot be
         // matched, so the writer synthesizes one in its place; a block the file
         // gained is matched by no source in the form, so the writer rebuilds
         // without it. Either way a hand-written block and its comments go.
         let lost = origins.subtracting(onDisk).sorted()
-        let gained = onDisk.subtracting(origins).sorted()
+        let gained = onDisk.subtracting(loaded).sorted()
         guard !lost.isEmpty || !gained.isEmpty else { return nil }
 
         func names(_ ids: [String]) -> String {

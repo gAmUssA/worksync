@@ -326,6 +326,59 @@ final class SettingsReloadTests: XCTestCase {
         XCTAssertNil(model.settingsProblem, "and a clean form must not be held back by it")
     }
 
+    /// Removing a source drops its origin on purpose. Measuring "gained"
+    /// against the current origins therefore reports the user's own deletion
+    /// as a block that appeared on disk, and Save never comes back.
+    func testDeletingASourceDoesNotLookLikeAnExternalAddition() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let travel = try XCTUnwrap(model.handle(of: "travel"))
+        model.selectedSource = travel
+        model.removeSelectedSource()
+
+        // An unrelated hand edit elsewhere in the file.
+        var edited = try MenuBarFixture.twoSources()
+        edited.sources[0].titleExcludes = ["lunch"]
+        recorder.config = edited
+        model.panelWillAppear()
+
+        XCTAssertNil(
+            model.settingsProblem,
+            "the deletion is the user's own, and is exactly what the save is for"
+        )
+        model.saveSettings()
+        XCTAssertEqual(
+            recorder.savedConfigs.last?.config.sources.map(\.id), ["personal"],
+            "the deletion has to be committable"
+        )
+    }
+
+    /// Drafts are stored per source, and a setter retained from a source the
+    /// user has left can still deliver into its slot after the selection
+    /// cleared it. Nothing renders that text, so counting it as unsaved input
+    /// would refuse every future reload.
+    func testAnInvisibleDraftFromAnOldSelectionDoesNotBlockAReload() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        let travel = try XCTUnwrap(model.handle(of: "travel"))
+
+        model.setTitleFilterDraft(.excludes, to: "typed into personal", of: personal)
+        model.seedSourceIDDraft(for: travel)
+        // A field retained from personal delivers late, into a slot the
+        // selection change already cleared.
+        model.setTitleFilterDraft(.excludes, to: "late from personal", of: personal)
+        XCTAssertEqual(model.titleFilterDraft(.excludes, of: travel), "", "nothing is on screen")
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[0].titleExcludes = ["lunch"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        XCTAssertEqual(
+            model.editingConfig?.sources.first?.titleExcludes, ["lunch"],
+            "text nobody can see must not hold the form back forever"
+        )
+    }
+
     // MARK: Recovering from a blocked form
 
     /// A failed `openSettings` leaves the screen blocked. Fixing the file and
