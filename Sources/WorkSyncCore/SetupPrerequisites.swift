@@ -17,12 +17,16 @@ import Foundation
 public enum SetupPrerequisites {
     /// The gating checks, in DEPENDENCY order.
     ///
-    /// Not severity order, which is what doctor sorts by. Doctor's checks are
-    /// independent and it ranks them by how bad they are; setup walks a user
-    /// forwards, and each of these is only answerable once the one before it
-    /// is. Access first, because without it the rest are unknowable; then a
-    /// config to read, then names that resolve, then a target that accepts
-    /// writes, then something that will actually run.
+    /// Neither of the orders that already exist. `DoctorChecks.run` appends in
+    /// a fixed check order and `DoctorReport.text` renders it unchanged; the
+    /// menu bar's Health section sorts by severity
+    /// (`MenuBarModel.healthProblems`), which is the right ranking for "what
+    /// is worst" and the wrong one for "what do I do next".
+    ///
+    /// Setup walks a user forwards, and each of these is only answerable once
+    /// the one before it is. Access first, because without it the rest are
+    /// unknowable; then a config to read, then names that resolve, then a
+    /// target that accepts writes, then something that will actually run.
     public static let ordered: [String] = [
         "calendar-access",
         "config",
@@ -61,7 +65,10 @@ public enum SetupPrerequisites {
     /// caller rendering "waiting on X" needs to name it either way, and a
     /// check that did not report is a different problem from one that failed.
     public enum Blocker: Equatable, Sendable {
-        /// The check ran and is not satisfied.
+        /// The report carries this check and it is not satisfied — failing,
+        /// or `.skipped` because an earlier check left it unknowable. Both
+        /// arrive here: what the caller has is a finding to render, whether or
+        /// not the check got as far as running.
         case failing(DoctorFinding)
         /// The report does not mention this check at all.
         case notReported(id: String)
