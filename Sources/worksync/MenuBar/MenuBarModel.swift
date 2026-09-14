@@ -966,7 +966,13 @@ extension MenuBarModel {
         // The source may have been removed, or renamed by another path, while
         // the alert was up. Either way the user agreed to something that is no
         // longer true, so the field goes back to what the config holds.
-        guard let liveID = sourceHandles.id(of: rename.source), liveID == rename.from else {
+        //
+        // Asked of `editingConfig`, not of `sourceHandles`: the config is what
+        // `applyRename` will search, and the two can disagree. A handle map
+        // still saying "personal" while the config says otherwise would pass a
+        // handle-only check, and `applyRename` would then find nothing and
+        // return silently with the alert already dismissed.
+        guard let liveID = source(for: rename.source)?.id, liveID == rename.from else {
             // Reseeded WITHOUT committing: `seedSourceIDDraft` commits the
             // draft first, and the draft still holds `rename.to` — the rename
             // this branch exists to discard. It would re-apply it, or raise the
