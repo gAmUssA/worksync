@@ -262,6 +262,52 @@ final class SettingsReloadTests: XCTestCase {
         )
     }
 
+    // MARK: What a reload must not touch
+
+    /// `configError` also carries a failed sync, and only a completed pass
+    /// clears it. Clearing it because the file happened to parse turns the
+    /// menu bar icon green while the tool is still failing.
+    func testAReloadDoesNotEraseASyncFailure() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        recorder.passOutcome = PassOutcome(
+            disposition: .failed("calendar access was revoked"), result: nil, diagnostics: nil
+        )
+        model.syncNow()
+        await model.passTask?.value
+        XCTAssertEqual(model.configError, "calendar access was revoked")
+        XCTAssertEqual(model.state, .error)
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[0].titleExcludes = ["lunch"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        XCTAssertEqual(
+            model.configError, "calendar access was revoked",
+            "a file that parses says nothing about whether syncing works"
+        )
+        XCTAssertEqual(model.state, .error, "and the icon must not go green without a good pass")
+    }
+
+    /// The calendar list belongs to the config that was loaded with it. A hand
+    /// edit can name an account the old list never had, and the pickers would
+    /// then mark a perfectly valid value as missing.
+    func testAdoptingAReloadAsksForTheCalendarsAgain() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let before = recorder.calendarLookups
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[0].titleExcludes = ["lunch"]
+        recorder.config = changed
+        model.panelWillAppear()
+        await model.calendarChoicesTask?.value
+
+        XCTAssertEqual(
+            recorder.calendarLookups, before + 1,
+            "the list has to describe the config now on screen"
+        )
+    }
+
     // MARK: Identities the form can no longer match to the file
 
     /// Through the real writer, against a real file: if the form keeps edits

@@ -526,15 +526,19 @@ extension MenuBarModel {
         do {
             onDisk = try services.loadConfig()
         } catch {
-            // The form is holding the user's work; emptying it because the file
-            // is momentarily unparseable would destroy more than it protects.
-            configError = error.localizedDescription
+            // The form is holding whatever the user has; emptying it because
+            // the file is momentarily unparseable would destroy more than it
+            // protects.
+            //
+            // `configError` is deliberately untouched here and below. It also
+            // carries a failed sync and is cleared only by a pass that
+            // completes, so clearing it because the file happens to parse would
+            // turn the icon green while syncing is still broken.
             settingsReloadError = "config.toml could not be re-read, so this form may be "
-                + "out of date. Your unsaved changes are still here.\n\n"
+                + "out of date. Nothing you have on screen has been lost.\n\n"
                 + error.localizedDescription
             return
         }
-        configError = nil
         settingsReloadError = nil
 
         // Nothing moved. Reseeding here would clear the selection and any
@@ -614,6 +618,10 @@ extension MenuBarModel {
         saveWarning = nil
         titleFilterRowIDs.removeAll()
         seedTitleFilterRowIDs()
+        // The list describes the accounts and calendars named by the config it
+        // was fetched for. A hand edit can name one the old list never had, and
+        // the pickers would then call a valid value missing.
+        loadCalendarChoices()
 
         // Keep the user on the source they were looking at when it survived the
         // external edit; otherwise fall back to the first.

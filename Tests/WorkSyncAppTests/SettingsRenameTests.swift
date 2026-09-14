@@ -45,6 +45,41 @@ final class SettingsRenameTests: XCTestCase {
         XCTAssertNil(model.renameError)
     }
 
+    /// `addSource` is itself a commit point for a pending name. Answering the
+    /// warning before calling it — as the test above does — skips that path, so
+    /// this one keeps the draft dirty across the call.
+    func testAddingASourceCommitsAPendingNameFirst() async throws {
+        let (model, _, _) = try await opened()
+        let personal = try handle(model, "personal")
+
+        model.setSourceName("home", of: personal)
+        model.addSource()
+
+        XCTAssertNotNil(model.pendingRename, "the pending name was judged by addSource, not ignored")
+        model.confirmPendingRename()
+        XCTAssertEqual(model.source(for: personal)?.id, "home")
+        XCTAssertNil(model.renameError)
+    }
+
+    /// Same commit point on the selection path.
+    func testSelectingAnotherSourceCommitsAPendingNameFirst() async throws {
+        let (model, _, _) = try await opened()
+        let personal = try handle(model, "personal")
+        let travel = try handle(model, "travel")
+
+        model.setSourceName("home", of: personal)
+        model.seedSourceIDDraft(for: travel)
+
+        XCTAssertNotNil(model.pendingRename)
+        XCTAssertEqual(
+            model.selectedSource, personal,
+            "the selection waits on the open question, as it does for a refused name"
+        )
+
+        model.confirmPendingRename()
+        XCTAssertEqual(model.source(for: personal)?.id, "home")
+    }
+
     func testSelectingAnotherSourceIsBlockedWhileTheNameIsInvalid() async throws {
         let (model, _, _) = try await opened()
         let personal = try handle(model, "personal")
