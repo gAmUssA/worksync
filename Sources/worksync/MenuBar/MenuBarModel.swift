@@ -952,10 +952,38 @@ extension MenuBarModel {
         }
     }
 
+    /// Applies the rename the user just agreed to — if it is still the rename
+    /// they were asked about.
+    ///
+    /// The alert is not modal to the model: the list can be edited while it is
+    /// on screen. The handle guarantees the right *source* (ADR-0005); it does
+    /// not guarantee the question still applies to it, and the collision check
+    /// that let the warning open was made against the list as it was then.
     func confirmPendingRename() {
         guard let rename = pendingRename else { return }
-        applyRename(rename.source, to: rename.to)
         pendingRename = nil
+
+        // The source may have been removed, or renamed by another path, while
+        // the alert was up. Either way the user agreed to something that is no
+        // longer true, so the field goes back to what the config holds.
+        guard let liveID = sourceHandles.id(of: rename.source), liveID == rename.from else {
+            seedSourceIDDraft(for: selectedSource)
+            return
+        }
+
+        // Asked again, against the list as it is now. Same rule as the commit
+        // that raised the warning — a second implementation here would be free
+        // to disagree with that one, and the loader would then refuse the save.
+        let others = (editingConfig?.sources.map(\.id) ?? []).filter { $0 != liveID }
+        if let reason = SourceIDDraft.collisionReason(for: rename.to, among: others) {
+            // The typed name stays on screen with the reason under it, so the
+            // user can change it. `saveSettings` refuses while this is set.
+            renameError = reason
+            return
+        }
+
+        renameError = nil
+        applyRename(rename.source, to: rename.to)
     }
 
     /// Cancelling puts the field back to the id the config still holds, so it
