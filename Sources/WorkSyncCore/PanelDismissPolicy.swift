@@ -6,13 +6,26 @@ import Foundation
 /// one is a bug that is invisible in code review and annoying in use (SPEC
 /// §11.0).
 public enum PanelDismissPolicy {
+    /// - Parameter isSheetOfPanel: whether the event's window is attached to
+    ///   the panel as a sheet. Structural on purpose: SwiftUI's `.alert`
+    ///   arrives as an `_NSAlertPanel`, but the name is AppKit's to change and
+    ///   the relationship is not.
     public static func shouldKeepOpen(
         eventWindowClassName: String?,
         isPanelWindow: Bool,
-        hitsStatusButton: Bool
+        hitsStatusButton: Bool,
+        isSheetOfPanel: Bool
     ) -> Bool {
         // A click inside the panel is not an outside click.
         if isPanelWindow {
+            return true
+        }
+
+        // A sheet of the panel is part of the panel as far as the user is
+        // concerned. Dismissing on it orders the panel out — and the sheet
+        // with it — before the button's mouse-up fires, so an alert presented
+        // from the settings screen cannot be answered at all.
+        if isSheetOfPanel {
             return true
         }
 

@@ -194,6 +194,10 @@ final class StatusItemController: NSObject {
         // revoked between opens, and that is precisely what the panel is being
         // opened to find out.
         model.refreshHealth()
+        // And the same again for the config: dismissing the panel leaves the
+        // settings screen open, so the form can be holding a copy of a file the
+        // user has since edited by hand.
+        model.panelWillAppear()
 
         let controller = hostingController ?? {
             let created = NSHostingController(rootView: PanelView(model: model))
@@ -318,7 +322,8 @@ final class StatusItemController: NSObject {
         if PanelDismissPolicy.shouldKeepOpen(
             eventWindowClassName: event.window.map { String(describing: type(of: $0)) },
             isPanelWindow: event.window === panel,
-            hitsStatusButton: hitsStatusButton(event)
+            hitsStatusButton: hitsStatusButton(event),
+            isSheetOfPanel: event.window?.sheetParent === panel
         ) {
             return
         }

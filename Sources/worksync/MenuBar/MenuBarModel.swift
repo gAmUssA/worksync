@@ -68,6 +68,15 @@ final class MenuBarModel {
     /// so that loss is visible rather than inferred from a diff much later.
     var saveWarning: String?
     var pendingRename: PendingRename?
+
+    /// The config exactly as `openSettings` read it. The form is "clean" while
+    /// `editingConfig` still equals this, which is what makes an unattended
+    /// reload safe.
+    private var settingsBaseline: Config?
+
+    /// The file changed under a form that has unsaved edits. Surfaced rather
+    /// than resolved: the edits are the user's, and so is the choice.
+    var configChangedOnDisk = false
     /// The id field's text while it is being edited, held apart from
     /// `editingConfig` so a rename is judged once on commit rather than on
     /// every keystroke.
@@ -465,6 +474,8 @@ extension MenuBarModel {
         do {
             let config = try services.loadConfig()
             editingConfig = config
+            settingsBaseline = config
+            configChangedOnDisk = false
             sourceHandles.seed(config.sources.map(\.id))
             sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
             configError = nil
@@ -485,11 +496,69 @@ extension MenuBarModel {
         screen = .settings
     }
 
+    /// Re-reads the config when the panel becomes visible again.
+    ///
+    /// Dismissing the panel does not close the settings screen, so a form can
+    /// outlive the file it was opened from — and a save from that form would
+    /// write a stale copy over whatever the file now holds.
+    func panelWillAppear() {
+        guard screen == .settings, let baseline = settingsBaseline else { return }
+
+        let onDisk: Config
+        do {
+            onDisk = try services.loadConfig()
+        } catch {
+            // The form is holding the user's work; emptying it because the file
+            // is momentarily unparseable would destroy more than it protects.
+            configError = error.localizedDescription
+            return
+        }
+        configError = nil
+
+        // Nothing moved. Reseeding here would clear the selection and any
+        // half-typed draft on every panel open.
+        guard onDisk != baseline else { return }
+
+        guard editingConfig == baseline else {
+            // Unsaved edits win over an unattended reload — but the user is
+            // told, because saving will otherwise overwrite the other change.
+            configChangedOnDisk = true
+            return
+        }
+
+        adoptReloadedConfig(onDisk)
+    }
+
+    /// Replaces the form's config with `config`, re-establishing the identity
+    /// the form is keyed by: the ids are new data, so the handles that point at
+    /// them have to be minted again.
+    private func adoptReloadedConfig(_ config: Config) {
+        let selectedID = selectedSource.flatMap { sourceHandles.id(of: $0) }
+
+        editingConfig = config
+        settingsBaseline = config
+        configChangedOnDisk = false
+        sourceHandles.seed(config.sources.map(\.id))
+        sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
+        sourceNameDraft.removeAll()
+        titleFilterDrafts.removeAll()
+        renameError = nil
+        pendingRename = nil
+        seedTitleFilterRowIDs()
+
+        // Keep the user on the source they were looking at when it survived the
+        // external edit; otherwise fall back to the first.
+        let restored = selectedID.flatMap { sourceHandles.handle(of: $0) }
+        select(restored ?? config.sources.first.flatMap { sourceHandles.handle(of: $0.id) })
+    }
+
     func closeSettings() {
         // The list belongs to the form that asked for it, so it dies with it.
         calendarChoicesTask?.cancel()
         screen = .dashboard
         editingConfig = nil
+        settingsBaseline = nil
+        configChangedOnDisk = false
         sourceOrigins = [:]
         pendingRename = nil
         sourceNameDraft.removeAll()

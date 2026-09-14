@@ -7,13 +7,15 @@ import XCTest
 final class PanelDismissPolicyTests: XCTestCase {
     func testOrdinaryOutsideClickDismisses() {
         XCTAssertFalse(PanelDismissPolicy.shouldKeepOpen(
-            eventWindowClassName: "NSWindow", isPanelWindow: false, hitsStatusButton: false
+            eventWindowClassName: "NSWindow", isPanelWindow: false,
+            hitsStatusButton: false, isSheetOfPanel: false
         ))
     }
 
     func testClickInsideThePanelKeepsItOpen() {
         XCTAssertTrue(PanelDismissPolicy.shouldKeepOpen(
-            eventWindowClassName: "MenuBarPanel", isPanelWindow: true, hitsStatusButton: false
+            eventWindowClassName: "MenuBarPanel", isPanelWindow: true,
+            hitsStatusButton: false, isSheetOfPanel: false
         ))
     }
 
@@ -21,7 +23,8 @@ final class PanelDismissPolicyTests: XCTestCase {
         // The button toggles. Dismissing here too would close and immediately
         // reopen the panel, so the click appears to do nothing at all.
         XCTAssertTrue(PanelDismissPolicy.shouldKeepOpen(
-            eventWindowClassName: "NSStatusBarWindow", isPanelWindow: false, hitsStatusButton: true
+            eventWindowClassName: "NSStatusBarWindow", isPanelWindow: false,
+            hitsStatusButton: true, isSheetOfPanel: false
         ))
     }
 
@@ -32,16 +35,55 @@ final class PanelDismissPolicyTests: XCTestCase {
         for className in ["NSMenuWindow", "_NSPopoverWindow", "NSCarbonMenuWindow"] {
             XCTAssertTrue(
                 PanelDismissPolicy.shouldKeepOpen(
-                    eventWindowClassName: className, isPanelWindow: false, hitsStatusButton: false
+                    eventWindowClassName: className, isPanelWindow: false,
+                    hitsStatusButton: false, isSheetOfPanel: false
                 ),
                 "\(className) must not dismiss the panel"
             )
         }
     }
 
+    func testASheetOfThePanelDoesNotDismissIt() {
+        // Measured, not assumed: SwiftUI presents `.alert` as an _NSAlertPanel
+        // attached to the panel as a sheet (isSheet=true, parent=MenuBarPanel).
+        // Treating a click on it as an outside click orders the panel out —
+        // taking the sheet with it — before the button's mouse-up arrives, so
+        // neither Rename nor Cancel ever fires.
+        XCTAssertTrue(PanelDismissPolicy.shouldKeepOpen(
+            eventWindowClassName: "_NSAlertPanel",
+            isPanelWindow: false,
+            hitsStatusButton: false,
+            isSheetOfPanel: true
+        ))
+    }
+
+    func testTheSheetTestIsStructuralNotByClassName() {
+        // An _NSAlertPanel that is NOT this panel's sheet — another app's, or
+        // one left over from a closed window — is an ordinary outside click.
+        // Matching the class name instead would keep the panel open for it.
+        XCTAssertFalse(PanelDismissPolicy.shouldKeepOpen(
+            eventWindowClassName: "_NSAlertPanel",
+            isPanelWindow: false,
+            hitsStatusButton: false,
+            isSheetOfPanel: false
+        ))
+    }
+
+    func testASheetWithNoRecognizableClassNameStillKeepsItOpen() {
+        // The structural fact decides. A future AppKit rename must not
+        // reintroduce this bug.
+        XCTAssertTrue(PanelDismissPolicy.shouldKeepOpen(
+            eventWindowClassName: nil,
+            isPanelWindow: false,
+            hitsStatusButton: false,
+            isSheetOfPanel: true
+        ))
+    }
+
     func testUnknownWindowWithNoNameDismisses() {
         XCTAssertFalse(PanelDismissPolicy.shouldKeepOpen(
-            eventWindowClassName: nil, isPanelWindow: false, hitsStatusButton: false
+            eventWindowClassName: nil, isPanelWindow: false,
+            hitsStatusButton: false, isSheetOfPanel: false
         ))
     }
 

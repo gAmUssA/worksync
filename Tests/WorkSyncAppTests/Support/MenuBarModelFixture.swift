@@ -38,6 +38,7 @@ final class MenuBarRecorder {
     private(set) var passRuns = 0
     private(set) var healthRuns = 0
     private(set) var calendarLookups = 0
+    private(set) var configLoads = 0
 
     /// The change-debounce action, fired by hand rather than by waiting.
     private(set) var scheduledAction: (@MainActor () -> Void)?
@@ -45,6 +46,10 @@ final class MenuBarRecorder {
 
     func record(_ notification: PassNotification) {
         notifications.append(notification)
+    }
+
+    func countConfigLoad() {
+        configLoads += 1
     }
 
     func fireScheduledAction() {
@@ -239,6 +244,7 @@ enum MenuBarFixture {
             MenuBarServices(
                 configURL: { URL(fileURLWithPath: "/fixture/config.toml") },
                 loadConfig: {
+                    recorder.countConfigLoad()
                     if let error = recorder.configError {
                         throw error
                     }
