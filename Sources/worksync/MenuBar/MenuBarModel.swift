@@ -11,6 +11,12 @@ enum SyncState: Equatable {
     case syncing
     case error
     case paused
+    /// A prerequisite has never been met, or has stopped being met.
+    ///
+    /// Deliberately not `.error`: error means something that worked broke, and
+    /// showing that on a fresh install tells a new user their install failed
+    /// when nothing has gone wrong yet (`worksync-8vdh`).
+    case needsSetup
 
     var symbolName: String {
         switch self {
@@ -18,6 +24,7 @@ enum SyncState: Equatable {
         case .syncing: "calendar.badge.clock"
         case .error: "calendar.badge.exclamationmark"
         case .paused: "calendar.badge.minus"
+        case .needsSetup: "calendar.badge.plus"
         }
     }
 
@@ -27,6 +34,7 @@ enum SyncState: Equatable {
         case .syncing: "WorkSync: syncing"
         case .error: "WorkSync: last sync failed"
         case .paused: "WorkSync: paused"
+        case .needsSetup: "WorkSync: setup needed"
         }
     }
 }
@@ -381,11 +389,26 @@ final class MenuBarModel {
         sourceCounts = diagnostics.fetchedBySource
     }
 
+    /// What setup is waiting on, or nil when every prerequisite is met.
+    ///
+    /// Nil before the first health run too: with no report there is nothing to
+    /// derive from, and claiming setup is needed would badge the icon at every
+    /// launch until the first check lands.
+    var setupBlocker: SetupPrerequisites.Blocker? {
+        guard let health else { return nil }
+        return SetupPrerequisites.blocking(in: health.findings)
+    }
+
     private func refreshState() {
         if isPaused {
             state = .paused
         } else if isSyncing {
             state = .syncing
+        } else if setupBlocker != nil {
+            // Ahead of the error branch: an unmet prerequisite is why the
+            // errors below it are there, and calling a never-configured
+            // install broken is the wrong first thing to tell someone.
+            state = .needsSetup
         } else if configError != nil || lastRun?.succeeded == false || health?.worstSeverity == .error {
             // Health counts, not just the last pass. Revoked calendar access
             // makes every pass succeed at doing nothing, so a sync-only icon
@@ -414,6 +437,43 @@ final class MenuBarModel {
             self.health = report
             self.isCheckingHealth = false
             self.refreshState()
+            self.refreshScreen()
+        }
+    }
+
+    /// One row per prerequisite, in dependency order.
+    ///
+    /// Every prerequisite appears, including one the report does not mention.
+    /// `SetupPrerequisites.blocking` treats an unreported check as a blocker,
+    /// so filtering those out would put the panel on the setup screen with
+    /// nothing on it naming the reason.
+    var setupSteps: [SetupStep] {
+        guard let health else { return [] }
+        return SetupPrerequisites.ordered.map { id in
+            if let finding = health.findings.first(where: { $0.id == id }) {
+                .checked(finding)
+            } else {
+                .notReported(id: id)
+            }
+        }
+    }
+
+    /// Moves between the setup screen and the dashboard as check state
+    /// changes.
+    ///
+    /// Settings is left alone: it is somewhere the user asked to be, and a
+    /// health refresh landing mid-edit must not take the form away. The setup
+    /// screen is waiting for them when they leave it.
+    private func refreshScreen() {
+        switch screen {
+        case .settings:
+            return
+        case .dashboard where setupBlocker != nil:
+            screen = .setup
+        case .setup where setupBlocker == nil:
+            screen = .dashboard
+        case .dashboard, .setup:
+            return
         }
     }
 
@@ -473,9 +533,36 @@ final class MenuBarModel {
 
 // MARK: - Settings screen
 
+/// A prerequisite as the setup screen shows it.
+enum SetupStep: Identifiable, Equatable {
+    /// The check reported, whether it passed, failed or was skipped.
+    case checked(DoctorFinding)
+    /// The report does not mention this check. Rendered rather than dropped:
+    /// it still blocks setup, and a blocked screen has to say what it wants.
+    case notReported(id: String)
+
+    var id: String {
+        switch self {
+        case let .checked(finding): finding.id
+        case let .notReported(id): id
+        }
+    }
+
+    var isMet: Bool {
+        switch self {
+        case let .checked(finding): finding.severity == .ok || finding.severity == .warning
+        case .notReported: false
+        }
+    }
+}
+
 enum PanelScreen: Equatable {
     case dashboard
     case settings
+    /// Shown while a prerequisite is unmet. Derived, never stored: the screen
+    /// is a rendering of check state, so revocation re-enters it for free
+    /// (`worksync-9xmk`).
+    case setup
 }
 
 extension MenuBarModel {
@@ -679,7 +766,10 @@ extension MenuBarModel {
     func closeSettings() {
         // The list belongs to the form that asked for it, so it dies with it.
         calendarChoicesTask?.cancel()
-        screen = .dashboard
+        // Back to whichever screen check state says, not unconditionally the
+        // dashboard: a blocker that appeared while the form was open would
+        // otherwise wait for the next health refresh to be shown.
+        screen = setupBlocker == nil ? .dashboard : .setup
         editingConfig = nil
         settingsBaseline = nil
         configChangedOnDisk = false

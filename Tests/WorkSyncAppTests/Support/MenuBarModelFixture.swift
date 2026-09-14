@@ -21,7 +21,14 @@ final class MenuBarRecorder {
     var calendars: [CalendarRef] = []
     /// When set, lookups wait here until the test finishes them.
     var calendarGate: CalendarLookupGate?
-    var health = DoctorReport(findings: [])
+    /// A configured machine by default: every setup prerequisite met.
+    ///
+    /// An empty report is not neutral — `SetupPrerequisites` reads a
+    /// prerequisite it cannot find as unreported, so an empty default would put
+    /// every test that never mentions health into the needs-setup state.
+    var health = DoctorReport(
+        findings: SetupPrerequisites.ordered.map { DoctorFinding.ok(id: $0, $0) }
+    )
     var passOutcome = PassOutcome(disposition: .completed, result: nil, diagnostics: nil)
     var loginStatus: SMAppService.Status = .notRegistered
     var loginError: Error?

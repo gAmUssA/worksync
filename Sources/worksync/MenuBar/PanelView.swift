@@ -65,9 +65,12 @@ struct PanelView: View {
 
     var body: some View {
         Group {
-            if model.screen == .settings {
+            switch model.screen {
+            case .settings:
                 SettingsView(model: model)
-            } else {
+            case .setup:
+                setup
+            case .dashboard:
                 dashboard
             }
         }
@@ -103,6 +106,78 @@ struct PanelView: View {
     ///
     /// Rendered from the same `DoctorReport` the CLI prints — the CLI computes,
     /// this displays — so the two can never disagree about what healthy means.
+    /// Shown while a prerequisite is unmet, and replaced by the dashboard the
+    /// moment the last one is met. Derived from check state, never from a
+    /// stored "done" flag — so revoked access comes back here for free
+    /// (`worksync-n2bv`).
+    private var setup: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Finish setting up")
+                        .font(.headline)
+                    Text(
+                        "WorkSync mirrors your busy time onto a work calendar. Event titles "
+                            + "never leave your Mac — blockers are named by your template."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    ForEach(model.setupSteps, id: \.id) { step in
+                        setupStepRow(step)
+                    }
+                }
+                .padding(Theme.padding)
+            }
+            // Bounded like the settings screen: `showPanel` sizes the window
+            // from `fittingSize`, so an unconstrained scroll area grows the
+            // panel to its full content height instead of scrolling — five
+            // findings with wrapped detail lines is taller than a short
+            // display.
+            .frame(maxHeight: 420)
+            Divider()
+            footer
+        }
+        // Same width the dashboard pins itself to. Without it the panel sizes
+        // to its content and the long explanation stretches it — a real launch
+        // reported frame {{2345, 416}, {1063, 514}} against a 320pt panel.
+        .frame(width: Theme.width)
+        // The NSPanel is transparent by design (see `panelBackground`), so a
+        // screen that skips this renders straight onto the desktop.
+        .panelBackground()
+    }
+
+    /// A met prerequisite collapses to a checkmark row; an unmet one shows the
+    /// same detail and remediation the Health section gives it.
+    @ViewBuilder
+    private func setupStepRow(_ step: SetupStep) -> some View {
+        switch step {
+        case let .checked(finding) where step.isMet:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(finding.title).font(.callout).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+        case let .checked(finding):
+            problemRow(finding)
+        case let .notReported(id):
+            // Blocks setup, so it has to be on screen saying so rather than
+            // leaving the user looking at a screen with no reason on it.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+                Text("“\(id)” was not reported by the last check.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
     private var healthSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
