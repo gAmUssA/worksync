@@ -41,19 +41,24 @@ final class MenuBarConstructionTests: XCTestCase {
     func testStartupAsksForTheLoginStatusAndHealth() async {
         let (model, recorder, _) = MenuBarFixture.model()
         recorder.loginStatus = .enabled
-        recorder.health = DoctorReport(findings: [
-            DoctorFinding(
-                id: "calendar-access", title: "Calendar access", severity: .error,
-                detail: ["denied"], remediation: "Grant access in System Settings"
-            ),
-        ])
+        // A non-prerequisite error, so this stays a test about health reaching
+        // the icon. A failing prerequisite now shows `.needsSetup` instead —
+        // covered by `SetupStateTests`.
+        recorder.health = DoctorReport(
+            findings: SetupPrerequisites.ordered.map { DoctorFinding.ok(id: $0, $0) } + [
+                DoctorFinding(
+                    id: "log-size", title: "Log is enormous", severity: .error,
+                    detail: ["512 MB"], remediation: "Rotate it"
+                ),
+            ]
+        )
 
         model.startInitialRefreshes()
         await model.healthTask?.value
 
         XCTAssertEqual(model.loginItemStatus, .enabled)
         XCTAssertEqual(recorder.healthRuns, 1)
-        XCTAssertEqual(model.health?.findings.count, 1)
+        XCTAssertEqual(model.health?.findings.count, SetupPrerequisites.ordered.count + 1)
         XCTAssertEqual(model.state, SyncState.error, "a health error reaches the menu bar icon")
     }
 

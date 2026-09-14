@@ -1,7 +1,7 @@
 ---
 # worksync-9xmk
 title: Setup screen driven by check state
-status: todo
+status: in-progress
 type: epic
 created_at: 2026-08-17T19:28:13Z
 updated_at: 2026-08-17T19:28:13Z

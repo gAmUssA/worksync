@@ -65,9 +65,12 @@ struct PanelView: View {
 
     var body: some View {
         Group {
-            if model.screen == .settings {
+            switch model.screen {
+            case .settings:
                 SettingsView(model: model)
-            } else {
+            case .setup:
+                setup
+            case .dashboard:
                 dashboard
             }
         }
@@ -103,6 +106,59 @@ struct PanelView: View {
     ///
     /// Rendered from the same `DoctorReport` the CLI prints — the CLI computes,
     /// this displays — so the two can never disagree about what healthy means.
+    /// Shown while a prerequisite is unmet, and replaced by the dashboard the
+    /// moment the last one is met. Derived from check state, never from a
+    /// stored "done" flag — so revoked access comes back here for free
+    /// (`worksync-n2bv`).
+    private var setup: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Finish setting up")
+                        .font(.headline)
+                    Text(
+                        "WorkSync mirrors your busy time onto a work calendar. Event titles "
+                            + "never leave your Mac — blockers are named by your template."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    ForEach(model.setupSteps, id: \.id) { step in
+                        setupStepRow(step)
+                    }
+                }
+                .padding(Theme.padding)
+            }
+            Divider()
+            footer
+        }
+        // Same width the dashboard pins itself to. Without it the panel sizes
+        // to its content and the long explanation stretches it — a real launch
+        // reported frame {{2345, 416}, {1063, 514}} against a 320pt panel.
+        .frame(width: Theme.width)
+    }
+
+    /// A met prerequisite collapses to a checkmark row; an unmet one shows the
+    /// same detail and remediation the Health section gives it.
+    private func setupStepRow(_ step: DoctorFinding) -> some View {
+        let isMet = step.severity == .ok || step.severity == .warning
+        return Group {
+            if isMet {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text(step.title).font(.callout).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            } else {
+                problemRow(step)
+            }
+        }
+    }
+
     private var healthSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
