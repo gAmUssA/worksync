@@ -513,6 +513,9 @@ extension MenuBarModel {
             renameError = nil
             sourceNameDraft.removeAll()
             titleFilterDrafts.removeAll()
+            // Describes a read that this open has superseded; leaving it would
+            // put a stale parse failure in the footer beside the current one.
+            settingsReloadError = nil
             configError = error.localizedDescription
             settingsBlocked = "config.toml does not parse, so settings cannot be edited safely.\n\n"
                 + error.localizedDescription

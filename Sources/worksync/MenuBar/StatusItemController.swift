@@ -18,6 +18,35 @@ final class MenuBarPanel: NSPanel {
     override var canBecomeMain: Bool {
         false
     }
+
+    /// Turns two live windows into the policy's inputs.
+    ///
+    /// A seam, so the `sheetParent` comparison is covered by a test with real
+    /// AppKit objects. Passing the inputs straight to `PanelDismissPolicy`
+    /// tests only the policy: comparing against the wrong window here would
+    /// leave every test green while the alert is torn down before its
+    /// mouse-up, which is the bug this exists to prevent.
+    static func keepsPanelOpen(
+        eventWindow: NSWindow?, panel: NSWindow?, hitsStatusButton: Bool
+    ) -> Bool {
+        // Both comparisons are guarded on a real panel: `nil === nil` is true,
+        // so without this an event with no window and no panel reads as a click
+        // on the panel itself.
+        guard let panel else {
+            return PanelDismissPolicy.shouldKeepOpen(
+                eventWindowClassName: eventWindow.map { String(describing: type(of: $0)) },
+                isPanelWindow: false,
+                hitsStatusButton: hitsStatusButton,
+                isSheetOfPanel: false
+            )
+        }
+        return PanelDismissPolicy.shouldKeepOpen(
+            eventWindowClassName: eventWindow.map { String(describing: type(of: $0)) },
+            isPanelWindow: eventWindow === panel,
+            hitsStatusButton: hitsStatusButton,
+            isSheetOfPanel: eventWindow?.sheetParent === panel
+        )
+    }
 }
 
 @MainActor
@@ -319,11 +348,8 @@ final class StatusItemController: NSObject {
 
     private func handleOutsideClick(_ event: NSEvent) {
         guard panel?.isVisible == true else { return }
-        if PanelDismissPolicy.shouldKeepOpen(
-            eventWindowClassName: event.window.map { String(describing: type(of: $0)) },
-            isPanelWindow: event.window === panel,
-            hitsStatusButton: hitsStatusButton(event),
-            isSheetOfPanel: event.window?.sheetParent === panel
+        if MenuBarPanel.keepsPanelOpen(
+            eventWindow: event.window, panel: panel, hitsStatusButton: hitsStatusButton(event)
         ) {
             return
         }
