@@ -132,6 +132,12 @@ struct PanelView: View {
                 }
                 .padding(Theme.padding)
             }
+            // Bounded like the settings screen: `showPanel` sizes the window
+            // from `fittingSize`, so an unconstrained scroll area grows the
+            // panel to its full content height instead of scrolling — five
+            // findings with wrapped detail lines is taller than a short
+            // display.
+            .frame(maxHeight: 420)
             Divider()
             footer
         }
@@ -139,23 +145,36 @@ struct PanelView: View {
         // to its content and the long explanation stretches it — a real launch
         // reported frame {{2345, 416}, {1063, 514}} against a 320pt panel.
         .frame(width: Theme.width)
+        // The NSPanel is transparent by design (see `panelBackground`), so a
+        // screen that skips this renders straight onto the desktop.
+        .panelBackground()
     }
 
     /// A met prerequisite collapses to a checkmark row; an unmet one shows the
     /// same detail and remediation the Health section gives it.
-    private func setupStepRow(_ step: DoctorFinding) -> some View {
-        let isMet = step.severity == .ok || step.severity == .warning
-        return Group {
-            if isMet {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text(step.title).font(.callout).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
-            } else {
-                problemRow(step)
+    @ViewBuilder
+    private func setupStepRow(_ step: SetupStep) -> some View {
+        switch step {
+        case let .checked(finding) where step.isMet:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(finding.title).font(.callout).foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+        case let .checked(finding):
+            problemRow(finding)
+        case let .notReported(id):
+            // Blocks setup, so it has to be on screen saying so rather than
+            // leaving the user looking at a screen with no reason on it.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+                Text("“\(id)” was not reported by the last check.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
         }
     }
 

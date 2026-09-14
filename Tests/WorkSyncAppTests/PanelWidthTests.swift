@@ -48,4 +48,33 @@ final class PanelWidthTests: XCTestCase {
             )
         }
     }
+
+    /// The same failure in the other axis: `showPanel` sizes the window from
+    /// `fittingSize`, so an unbounded scroll area grows the panel to its whole
+    /// content instead of scrolling. Five findings with wrapped detail lines
+    /// is more than a short display has.
+    func testAVerboseSetupScreenScrollsRatherThanGrowing() async throws {
+        let (model, recorder, _) = try MenuBarFixture.model(config: MenuBarFixture.twoSources())
+        recorder.health = DoctorReport(
+            findings: SetupPrerequisites.ordered.map { id in
+                DoctorFinding(
+                    id: id, title: "\(id) is not satisfied", severity: .error,
+                    detail: Array(repeating: String(repeating: "detail ", count: 12), count: 4),
+                    remediation: String(repeating: "remediation ", count: 10)
+                )
+            }
+        )
+        model.refreshHealth()
+        await model.healthTask?.value
+        XCTAssertEqual(model.screen, .setup)
+
+        let controller = NSHostingController(rootView: PanelView(model: model))
+        controller.view.layoutSubtreeIfNeeded()
+        let height = controller.view.fittingSize.height
+
+        XCTAssertLessThanOrEqual(
+            height, 560,
+            "the panel grew to \(height)pt instead of scrolling its content"
+        )
+    }
 }

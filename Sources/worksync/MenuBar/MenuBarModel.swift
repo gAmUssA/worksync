@@ -441,14 +441,21 @@ final class MenuBarModel {
         }
     }
 
-    /// The prerequisites, in dependency order, for the setup screen to render.
+    /// One row per prerequisite, in dependency order.
     ///
-    /// The same findings the Health section shows, filtered and ordered
-    /// differently — one data set with two renderings, which is what keeps
-    /// them from drifting (`worksync-9xmk`).
-    var setupSteps: [DoctorFinding] {
+    /// Every prerequisite appears, including one the report does not mention.
+    /// `SetupPrerequisites.blocking` treats an unreported check as a blocker,
+    /// so filtering those out would put the panel on the setup screen with
+    /// nothing on it naming the reason.
+    var setupSteps: [SetupStep] {
         guard let health else { return [] }
-        return SetupPrerequisites.gating(in: health.findings)
+        return SetupPrerequisites.ordered.map { id in
+            if let finding = health.findings.first(where: { $0.id == id }) {
+                .checked(finding)
+            } else {
+                .notReported(id: id)
+            }
+        }
     }
 
     /// Moves between the setup screen and the dashboard as check state
@@ -525,6 +532,29 @@ final class MenuBarModel {
 }
 
 // MARK: - Settings screen
+
+/// A prerequisite as the setup screen shows it.
+enum SetupStep: Identifiable, Equatable {
+    /// The check reported, whether it passed, failed or was skipped.
+    case checked(DoctorFinding)
+    /// The report does not mention this check. Rendered rather than dropped:
+    /// it still blocks setup, and a blocked screen has to say what it wants.
+    case notReported(id: String)
+
+    var id: String {
+        switch self {
+        case let .checked(finding): finding.id
+        case let .notReported(id): id
+        }
+    }
+
+    var isMet: Bool {
+        switch self {
+        case let .checked(finding): finding.severity == .ok || finding.severity == .warning
+        case .notReported: false
+        }
+    }
+}
 
 enum PanelScreen: Equatable {
     case dashboard
@@ -736,7 +766,10 @@ extension MenuBarModel {
     func closeSettings() {
         // The list belongs to the form that asked for it, so it dies with it.
         calendarChoicesTask?.cancel()
-        screen = .dashboard
+        // Back to whichever screen check state says, not unconditionally the
+        // dashboard: a blocker that appeared while the form was open would
+        // otherwise wait for the next health refresh to be shown.
+        screen = setupBlocker == nil ? .dashboard : .setup
         editingConfig = nil
         settingsBaseline = nil
         configChangedOnDisk = false
