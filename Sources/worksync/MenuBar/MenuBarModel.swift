@@ -972,7 +972,14 @@ extension MenuBarModel {
         // still saying "personal" while the config says otherwise would pass a
         // handle-only check, and `applyRename` would then find nothing and
         // return silently with the alert already dismissed.
-        guard let liveID = source(for: rename.source)?.id, liveID == rename.from else {
+        // Exactly one row, because the handle reaches its row through its id:
+        // if `from` names two rows that association is ambiguous, and taking
+        // the first would rename whichever happens to be earlier — the defect
+        // `SourceHandle` was introduced to end (ADR-0005).
+        let matching = (editingConfig?.sources ?? []).filter { $0.id == rename.from }
+        guard matching.count == 1,
+              let liveID = source(for: rename.source)?.id, liveID == rename.from
+        else {
             // Reseeded WITHOUT committing: `seedSourceIDDraft` commits the
             // draft first, and the draft still holds `rename.to` — the rename
             // this branch exists to discard. It would re-apply it, or raise the

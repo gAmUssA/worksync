@@ -56,8 +56,44 @@ final class SettingsRenameConfirmTests: XCTestCase {
         model.confirmPendingRename()
 
         XCTAssertNil(model.pendingRename, "the question has been answered, one way or another")
-        let ids = try XCTUnwrap(model.editingConfig?.sources.map(\.id))
-        XCTAssertEqual(Set(ids).count, ids.count, "no duplicate ids reach the writer")
+        // Asserted through the loader rather than a hand-rolled uniqueness
+        // check: `validate` compares lowercased, so a confirm-time check that
+        // let "shared" and "SHARED" coexist would satisfy a case-sensitive Set
+        // and still be refused by the save.
+        let config = try XCTUnwrap(model.editingConfig)
+        XCTAssertNoThrow(try ConfigLoader.validate(config), "the form has to be savable")
+    }
+
+    func testConfirmingIntoAnIDTakenInADifferentCaseIsRefused() async throws {
+        let (model, _, _) = try await opened()
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        try raiseRename(model, of: personal, to: "shared")
+        let travel = try XCTUnwrap(model.handle(of: "travel"))
+        model.updateSource(travel) { $0.id = "SHARED" }
+
+        model.confirmPendingRename()
+
+        XCTAssertEqual(model.source(for: personal)?.id, "personal")
+        XCTAssertNotNil(model.renameError, "the loader rejects ids differing only in case")
+    }
+
+    /// The handle resolves to a row through its id, so an id that names two
+    /// rows makes that association ambiguous — and picking the first would
+    /// rename whichever row happened to be earlier, the original defect.
+    func testConfirmingIsRefusedWhileTwoRowsShareTheOldID() async throws {
+        let (model, _, _) = try await opened()
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        try raiseRename(model, of: personal, to: "shared")
+
+        let travel = try XCTUnwrap(model.handle(of: "travel"))
+        model.updateSource(travel) { $0.id = "personal" }
+
+        model.confirmPendingRename()
+
+        XCTAssertEqual(
+            model.editingConfig?.sources.map(\.id), ["personal", "personal"],
+            "neither row is renamed while it is ambiguous which one the alert meant"
+        )
     }
 
     // MARK: The question can stop applying to the source
