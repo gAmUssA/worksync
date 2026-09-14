@@ -262,6 +262,91 @@ final class SettingsReloadTests: XCTestCase {
         )
     }
 
+    // MARK: Identities the form can no longer match to the file
+
+    /// Through the real writer, against a real file: if the form keeps edits
+    /// while the file renamed a source, `sourceOrigins` still names the old id.
+    /// The writer cannot find that block, so it synthesizes one and the real
+    /// block — comments and all — is dropped.
+    func testASaveCannotSilentlyDropABlockItCannotMatch() async throws {
+        let directory = NSTemporaryDirectory() + "w3fn-origins-\(UUID().uuidString)"
+        let path = directory + "/config.toml"
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+
+        func write(_ travelID: String) throws {
+            try """
+            [target]
+            account = "Work"
+            calendar = "Calendar"
+
+            [[source]]
+            id = "personal"
+            account = "iCloud"
+            calendar = "Personal"
+
+            [[source]]
+            # Travel block documentation, written by hand.
+            id = "\(travelID)"
+            account = "Google"
+            calendar = "Travel"
+            """.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        try write("travel")
+
+        let recorder = MenuBarRecorder()
+        var services = MenuBarFixture.services(recorder: recorder)
+        services.loadConfig = { try ConfigLoader.load(path: path) }
+        services.saveConfig = { config, origins in
+            try ConfigWriter.save(config, to: path, sourceOrigins: origins)
+        }
+        let model = MenuBarModel(
+            initialState: MenuBarInitialState(isPaused: false, lastRun: nil, savedSourceIDs: []),
+            services: services
+        )
+        model.openSettings()
+        await model.calendarChoicesTask?.value
+
+        // An unsaved edit, so the reload keeps the form.
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.updateSource(personal) { $0.titleTemplate = "Mine, unsaved" }
+
+        // Meanwhile the file renames the other source.
+        try write("trips")
+        model.panelWillAppear()
+
+        model.saveSettings()
+
+        let written = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertTrue(
+            written.contains("# Travel block documentation, written by hand."),
+            "a save that cannot match a block must not drop it: \n\(written)"
+        )
+    }
+
+    func testARestoredFileRestoresTheSavedIDsToo() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["personal", "travel"]
+        )
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.updateSource(personal) { $0.titleTemplate = "Mine" }
+
+        var renamedOnDisk = try MenuBarFixture.twoSources()
+        renamedOnDisk.sources[1].id = "trips"
+        recorder.config = renamedOnDisk
+        model.panelWillAppear()
+        XCTAssertEqual(model.savedSourceIDs, ["personal", "trips"])
+
+        // Undone: the file is what the form was opened with again.
+        recorder.config = try MenuBarFixture.twoSources()
+        model.panelWillAppear()
+
+        XCTAssertEqual(
+            model.savedSourceIDs, ["personal", "travel"],
+            "the set describes the file as last read, so restoring the file restores it"
+        )
+    }
+
     // MARK: A failed reload must not let a stale form overwrite the file
 
     func testSaveIsBlockedWhileTheFileCouldNotBeReRead() async throws {

@@ -78,6 +78,11 @@ final class MenuBarModel {
     /// than resolved: the edits are the user's, and so is the choice.
     var configChangedOnDisk = false
 
+    /// Origins this form would write against that the file no longer has, so
+    /// a save could not match their blocks. Empty means every source in the
+    /// form can still be found on disk.
+    var sourceIdentitiesLost: [String]?
+
     /// Why the last reload could not be read, for the settings screen to show.
     /// Separate from `configError`, which nothing on this screen renders — an
     /// error the user cannot see is one that was swallowed.
@@ -482,6 +487,7 @@ extension MenuBarModel {
             settingsBaseline = config
             configChangedOnDisk = false
             settingsReloadError = nil
+            sourceIdentitiesLost = nil
             // The file's ids ARE the saved ids: they are what the sync timer
             // writes blockers under. Leaving this at the set captured when the
             // process started makes `SourceRenamePolicy.needsWarning` treat a
@@ -533,10 +539,16 @@ extension MenuBarModel {
 
         // Nothing moved. Reseeding here would clear the selection and any
         // half-typed draft on every panel open.
+        // One rule, before the branches: this set describes the file as last
+        // read. It is what the sync timer writes blockers under, so the purge
+        // warning has to judge against it whatever the form is doing.
+        savedSourceIDs = Set(onDisk.sources.map(\.id))
+
         guard onDisk != baseline else {
             // A file edited and then put back leaves nothing to overwrite, so
             // a standing warning about "the file's version" is now false.
             configChangedOnDisk = false
+            sourceIdentitiesLost = nil
             return
         }
 
@@ -544,10 +556,16 @@ extension MenuBarModel {
             // Unsaved work wins over an unattended reload — but the user is
             // told, because saving will otherwise overwrite the other change.
             configChangedOnDisk = true
-            // The working config stays theirs; the saved-id set does not belong
-            // to it. It describes the file, which is what the sync timer writes
-            // blockers under, so the purge warning has to judge against this.
-            savedSourceIDs = Set(onDisk.sources.map(\.id))
+            // The form keeps the user's config, but `sourceOrigins` still names
+            // the ids the file had when it was opened. Any origin the file no
+            // longer holds cannot be matched to a block, and `ConfigWriter`
+            // treats an unmatchable source as new — synthesizing a block and
+            // dropping the real one, comments included. Saving is not safe
+            // until the user resolves it.
+            let missing = sourceOrigins.values.filter { origin in
+                !onDisk.sources.contains { $0.id == origin }
+            }
+            sourceIdentitiesLost = missing.isEmpty ? nil : Set(missing).sorted()
             return
         }
 
@@ -579,6 +597,7 @@ extension MenuBarModel {
         settingsBaseline = config
         configChangedOnDisk = false
         settingsReloadError = nil
+        sourceIdentitiesLost = nil
         // Same reason as in `openSettings`: the warning that protects blockers
         // from being orphaned reads this set.
         savedSourceIDs = Set(config.sources.map(\.id))
@@ -610,6 +629,7 @@ extension MenuBarModel {
         settingsBaseline = nil
         configChangedOnDisk = false
         settingsReloadError = nil
+        sourceIdentitiesLost = nil
         sourceOrigins = [:]
         pendingRename = nil
         sourceNameDraft.removeAll()
@@ -1145,8 +1165,17 @@ extension MenuBarModel {
         // age, and saving it would serialize the old copy over the file the
         // user is part-way through fixing by hand.
         settingsReloadError
+            ?? unmatchableSourcesProblem
             ?? titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem
             ?? targetWritabilityProblem
+    }
+
+    /// Why a save cannot be matched to the file's blocks, or nil.
+    var unmatchableSourcesProblem: String? {
+        guard let lost = sourceIdentitiesLost, !lost.isEmpty else { return nil }
+        let names = lost.map { "“\($0)”" }.joined(separator: ", ")
+        return "config.toml no longer has \(names). Saving would replace those blocks "
+            + "rather than edit them, losing their comments. Cancel to take what is on disk."
     }
 
     // MARK: Saving
