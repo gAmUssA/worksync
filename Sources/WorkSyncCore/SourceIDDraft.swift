@@ -39,6 +39,22 @@ public struct SourceIDDraft: Equatable {
         text = committedID
     }
 
+    /// Why `candidate` cannot be used alongside `otherSourceIDs`, or nil.
+    ///
+    /// Shared so the confirmation step asks the same question this commit did.
+    /// The list can change while the warning is on screen, and a second
+    /// implementation there would be free to disagree with this one.
+    ///
+    /// Matches `ConfigLoader.validate`, which compares lowercased: two sources
+    /// differing only in case would collide on save.
+    public static func collisionReason(
+        for candidate: String, among otherSourceIDs: [String]
+    ) -> String? {
+        guard otherSourceIDs.contains(where: { $0.lowercased() == candidate.lowercased() })
+        else { return nil }
+        return "Another source is already called “\(candidate)”."
+    }
+
     /// What committing the current text should do.
     public enum Commit: Equatable {
         /// Nothing to apply — unchanged, or only whitespace differs.
@@ -72,10 +88,8 @@ public struct SourceIDDraft: Equatable {
 
         guard candidate != committedID else { return .unchanged }
 
-        // Matches `ConfigLoader.validate`, which compares lowercased: two
-        // sources differing only in case would collide on save.
-        guard !otherSourceIDs.contains(where: { $0.lowercased() == candidate.lowercased() }) else {
-            return .rejected(reason: "Another source is already called “\(candidate)”.")
+        if let reason = Self.collisionReason(for: candidate, among: otherSourceIDs) {
+            return .rejected(reason: reason)
         }
 
         guard SourceRenamePolicy.needsWarning(

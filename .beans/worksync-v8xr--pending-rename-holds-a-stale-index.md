@@ -1,7 +1,7 @@
 ---
 # worksync-v8xr
 title: 'Settings: a pending rename is not revalidated at confirm time'
-status: todo
+status: completed
 type: bug
 created_at: 2026-09-12T01:31:24Z
 updated_at: 2026-09-12T01:31:24Z
@@ -49,12 +49,14 @@ why it wants its own change.
 
 [x] Retain the source's identity (not index) in `PendingRename` — shipped as
       `SourceHandle`; see ADR-0005
-[ ] Verify at confirmation that the live source still carries `from`
-[ ] Repeat the destination-collision check against current sources at confirm
+[x] Verify at confirmation that the live source still carries `from`
+[x] Repeat the destination-collision check against current sources at confirm
 [x] Consider the stable editor-session token for sources generally — that is
       what `SourceHandle` became
-[ ] Tests: confirm-into-taken-id; confirm after the source's id changed by
-      another path
+[x] Tests: confirm-into-taken-id; confirm after the source was removed. The
+      id-changed-by-another-path half is unreachable through any supported
+      path and is left documented rather than faked — see
+      `SettingsRenameConfirmTests`
 
 ## Related
 - PR #7 (settings UI) — fixed the same class for the title-filter paths
