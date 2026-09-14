@@ -514,6 +514,16 @@ extension MenuBarModel {
             return
         }
         settingsBlocked = nil
+        // `openSettings` can be called on a form that is already up — from the
+        // status-item menu, or the blocked-form retry. Everything transient
+        // belongs to the config being replaced: an unanswered rename would
+        // reopen its alert against a handle this seed has just retired, and
+        // would hold back a form that is otherwise clean.
+        pendingRename = nil
+        renameError = nil
+        sourceNameDraft.removeAll()
+        titleFilterDrafts.removeAll()
+        titleFilterRowIDs.removeAll()
         seedTitleFilterRowIDs()
         loadCalendarChoices()
         select(editingConfig?.sources.first.flatMap { sourceHandles.handle(of: $0.id) })
@@ -1204,11 +1214,28 @@ extension MenuBarModel {
     /// Recomputed on every read, so removing the offending source clears it.
     var unmatchableSourcesProblem: String? {
         guard let onDisk = lastReadSourceIDs else { return nil }
-        let lost = Set(sourceOrigins.values).subtracting(onDisk).sorted()
-        guard !lost.isEmpty else { return nil }
-        let names = lost.map { "“\($0)”" }.joined(separator: ", ")
-        return "config.toml no longer has \(names). Saving would replace those blocks "
-            + "rather than edit them, losing their comments. Cancel to take what is on disk."
+        let origins = Set(sourceOrigins.values)
+
+        // Both directions lose a block. An origin the file dropped cannot be
+        // matched, so the writer synthesizes one in its place; a block the file
+        // gained is matched by no source in the form, so the writer rebuilds
+        // without it. Either way a hand-written block and its comments go.
+        let lost = origins.subtracting(onDisk).sorted()
+        let gained = onDisk.subtracting(origins).sorted()
+        guard !lost.isEmpty || !gained.isEmpty else { return nil }
+
+        func names(_ ids: [String]) -> String {
+            ids.map { "“\($0)”" }.joined(separator: ", ")
+        }
+        let what = if lost.isEmpty {
+            "has \(names(gained)), which this form never loaded"
+        } else if gained.isEmpty {
+            "no longer has \(names(lost))"
+        } else {
+            "no longer has \(names(lost)), and has gained \(names(gained))"
+        }
+        return "config.toml \(what). Saving would rewrite those blocks rather than edit "
+            + "them, losing their comments. Cancel to take what is on disk."
     }
 
     // MARK: Saving

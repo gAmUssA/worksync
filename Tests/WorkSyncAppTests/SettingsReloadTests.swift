@@ -262,6 +262,70 @@ final class SettingsReloadTests: XCTestCase {
         )
     }
 
+    /// The symmetric case, and the likelier one: a source added to the file by
+    /// hand is not in the form's origins, so the writer rebuilds only the
+    /// form's sources and drops the new block with its comments.
+    func testASaveCannotSilentlyDropABlockAddedToTheFile() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.updateSource(personal) { $0.titleTemplate = "Mine, unsaved" }
+
+        var withNewSource = try MenuBarFixture.twoSources()
+        withNewSource.sources.append(
+            SourceConfig(id: "added-by-hand", account: "iCloud", calendar: "Family")
+        )
+        recorder.config = withNewSource
+        model.panelWillAppear()
+
+        let problem = try XCTUnwrap(
+            model.settingsProblem,
+            "saving would drop the block this form never knew about"
+        )
+        XCTAssertTrue(problem.contains("added-by-hand"), problem)
+
+        model.saveSettings()
+        XCTAssertTrue(recorder.savedConfigs.isEmpty, "the writer must not be called")
+    }
+
+    /// A blocked FIRST open leaves the screen on the dashboard, so the reload
+    /// has nothing to retry — the Settings… button is the way back, and it
+    /// re-reads. Documented because the retry path above looks like it should
+    /// cover this and does not.
+    func testAFailedFirstOpenRecoversThroughTheSettingsButton() throws {
+        let (model, recorder, _) = try MenuBarFixture.model(config: MenuBarFixture.twoSources())
+        recorder.configError = ConfigError.parseFailure("unexpected ]")
+        model.openSettings()
+        XCTAssertEqual(model.screen, .dashboard, "a refused first open never leaves the dashboard")
+
+        model.panelWillAppear()
+        XCTAssertEqual(model.screen, .dashboard, "and the reload has no form to refresh")
+
+        recorder.configError = nil
+        model.openSettings()
+        XCTAssertEqual(model.screen, .settings)
+        XCTAssertNil(model.settingsBlocked)
+    }
+
+    /// `openSettings` can be called on a form that already has an alert up.
+    /// The new form is a different config, so the question belongs to nothing.
+    func testAFreshOpenDropsAnUnansweredRenameFromTheOldForm() async throws {
+        let (model, _, _) = try await MenuBarFixture.opened(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["personal", "travel"]
+        )
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.setSourceName("home", of: personal)
+        model.commitSourceName(of: personal)
+        XCTAssertNotNil(model.pendingRename)
+
+        model.openSettings()
+
+        XCTAssertNil(
+            model.pendingRename,
+            "the alert would reopen against a handle this form has retired"
+        )
+        XCTAssertNil(model.settingsProblem, "and a clean form must not be held back by it")
+    }
+
     // MARK: Recovering from a blocked form
 
     /// A failed `openSettings` leaves the screen blocked. Fixing the file and
@@ -307,9 +371,13 @@ final class SettingsReloadTests: XCTestCase {
         let personal = try XCTUnwrap(model.handle(of: "personal"))
         model.updateSource(personal) { $0.titleTemplate = "Mine, unsaved" }
 
-        var renamedOnDisk = try MenuBarFixture.twoSources()
-        renamedOnDisk.sources[1].id = "trips"
-        recorder.config = renamedOnDisk
+        // Deleted, not renamed: there is no block left for the form to lose,
+        // so removing the source from the form resolves it completely. (An
+        // external *rename* leaves a block the form never loaded, which stays
+        // blocked — see the two drop tests above.)
+        var deletedOnDisk = try MenuBarFixture.twoSources()
+        deletedOnDisk.sources.removeLast()
+        recorder.config = deletedOnDisk
         model.panelWillAppear()
         XCTAssertNotNil(model.settingsProblem, "travel cannot be matched on disk")
 
