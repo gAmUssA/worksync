@@ -67,6 +67,24 @@ public struct TitleFilterDrafts: Equatable {
         texts[source] = nil
     }
 
+    /// Whether `source` holds text the user typed and has not added yet.
+    ///
+    /// An unattended reload would throw this away, so it has to count as
+    /// unsaved input even though none of it has reached the working config.
+    ///
+    /// Scoped to one source, never the whole store: a setter retained from a
+    /// source the user has left still delivers into its slot after the
+    /// selection cleared it, and nothing renders that text. Counting it would
+    /// call the form dirty forever and refuse every future reload.
+    ///
+    /// Not trimmed. Whitespace is refused as an *entry*, but it is still
+    /// something the user typed, and it is what a half-finished field looks
+    /// like between two words. Treating it as nothing discards it silently.
+    public func hasTypedText(of source: SourceHandle?) -> Bool {
+        guard let source, let fields = texts[source] else { return false }
+        return fields.values.contains { !$0.isEmpty }
+    }
+
     /// Drops everything — the selection moved, or the form is closing.
     public mutating func removeAll() {
         texts = [:]

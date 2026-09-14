@@ -38,6 +38,7 @@ final class MenuBarRecorder {
     private(set) var passRuns = 0
     private(set) var healthRuns = 0
     private(set) var calendarLookups = 0
+    private(set) var configLoads = 0
 
     /// The change-debounce action, fired by hand rather than by waiting.
     private(set) var scheduledAction: (@MainActor () -> Void)?
@@ -45,6 +46,10 @@ final class MenuBarRecorder {
 
     func record(_ notification: PassNotification) {
         notifications.append(notification)
+    }
+
+    func countConfigLoad() {
+        configLoads += 1
     }
 
     func fireScheduledAction() {
@@ -239,6 +244,7 @@ enum MenuBarFixture {
             MenuBarServices(
                 configURL: { URL(fileURLWithPath: "/fixture/config.toml") },
                 loadConfig: {
+                    recorder.countConfigLoad()
                     if let error = recorder.configError {
                         throw error
                     }
@@ -330,6 +336,19 @@ enum MenuBarFixture {
         made.model.openSettings()
         await made.model.calendarChoicesTask?.value
         return made
+    }
+
+    /// Renames a source the way the UI does, answering the purge warning.
+    ///
+    /// The live app seeds `savedSourceIDs` from the config file, so every
+    /// source loaded from disk raises the warning on rename. A test that skips
+    /// the confirmation is exercising a state the app cannot be in.
+    static func rename(_ model: MenuBarModel, _ handle: SourceHandle, to newID: String) {
+        model.setSourceName(newID, of: handle)
+        model.commitSourceName(of: handle)
+        if model.pendingRename != nil {
+            model.confirmPendingRename()
+        }
     }
 
     static let emptyConfig = Config(

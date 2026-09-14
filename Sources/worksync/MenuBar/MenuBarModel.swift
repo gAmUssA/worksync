@@ -68,6 +68,29 @@ final class MenuBarModel {
     /// so that loss is visible rather than inferred from a diff much later.
     var saveWarning: String?
     var pendingRename: PendingRename?
+
+    /// The config exactly as `openSettings` read it. The form is "clean" while
+    /// `editingConfig` still equals this, which is what makes an unattended
+    /// reload safe.
+    private var settingsBaseline: Config?
+
+    /// The file changed under a form that has unsaved edits. Surfaced rather
+    /// than resolved: the edits are the user's, and so is the choice.
+    var configChangedOnDisk = false
+
+    /// The source ids the config file had when it was last read. Nil until a
+    /// reload has seen the file change under an edited form.
+    ///
+    /// Stored rather than the verdict itself: the verdict depends on the
+    /// form's origins, which go on changing as the user edits, so a snapshot
+    /// taken at reload time goes stale the moment they remove the offending
+    /// source.
+    private var lastReadSourceIDs: Set<String>?
+
+    /// Why the last reload could not be read, for the settings screen to show.
+    /// Separate from `configError`, which nothing on this screen renders — an
+    /// error the user cannot see is one that was swallowed.
+    var settingsReloadError: String?
     /// The id field's text while it is being edited, held apart from
     /// `editingConfig` so a rename is judged once on commit rather than on
     /// every keystroke.
@@ -465,11 +488,34 @@ extension MenuBarModel {
         do {
             let config = try services.loadConfig()
             editingConfig = config
+            settingsBaseline = config
+            configChangedOnDisk = false
+            settingsReloadError = nil
+            lastReadSourceIDs = nil
+            // The file's ids ARE the saved ids: they are what the sync timer
+            // writes blockers under. Leaving this at the set captured when the
+            // process started makes `SourceRenamePolicy.needsWarning` treat a
+            // live source as one no event can carry, skipping the purge
+            // warning (SPEC §4.1).
+            savedSourceIDs = Set(config.sources.map(\.id))
             sourceHandles.seed(config.sources.map(\.id))
             sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
             configError = nil
         } catch {
             editingConfig = nil
+            // The previous session's baseline describes a form that no longer
+            // exists; leaving it would let the next reload compare against it.
+            settingsBaseline = nil
+            lastReadSourceIDs = nil
+            // `SettingsView` binds the alert to this directly, so it would stay
+            // up over the blocked notice, pointing at a retired handle.
+            pendingRename = nil
+            renameError = nil
+            sourceNameDraft.removeAll()
+            titleFilterDrafts.removeAll()
+            // Describes a read that this open has superseded; leaving it would
+            // put a stale parse failure in the footer beside the current one.
+            settingsReloadError = nil
             configError = error.localizedDescription
             settingsBlocked = "config.toml does not parse, so settings cannot be edited safely.\n\n"
                 + error.localizedDescription
@@ -477,6 +523,16 @@ extension MenuBarModel {
             return
         }
         settingsBlocked = nil
+        // `openSettings` can be called on a form that is already up — from the
+        // status-item menu, or the blocked-form retry. Everything transient
+        // belongs to the config being replaced: an unanswered rename would
+        // reopen its alert against a handle this seed has just retired, and
+        // would hold back a form that is otherwise clean.
+        pendingRename = nil
+        renameError = nil
+        sourceNameDraft.removeAll()
+        titleFilterDrafts.removeAll()
+        titleFilterRowIDs.removeAll()
         seedTitleFilterRowIDs()
         loadCalendarChoices()
         select(editingConfig?.sources.first.flatMap { sourceHandles.handle(of: $0.id) })
@@ -485,11 +541,150 @@ extension MenuBarModel {
         screen = .settings
     }
 
+    /// Re-reads the config when the panel becomes visible again.
+    ///
+    /// Dismissing the panel does not close the settings screen, so a form can
+    /// outlive the file it was opened from — and a save from that form would
+    /// write a stale copy over whatever the file now holds.
+    func panelWillAppear() {
+        guard screen == .settings else { return }
+
+        // A previous open refused the file, so there is no form to refresh —
+        // only a notice about a file the user has probably just gone and
+        // fixed. Retrying is what they expect reopening the panel to do; a
+        // still-broken file simply blocks again with the current reason.
+        if settingsBlocked != nil {
+            openSettings()
+            return
+        }
+
+        guard let baseline = settingsBaseline else { return }
+
+        let onDisk: Config
+        do {
+            onDisk = try services.loadConfig()
+        } catch {
+            // The form is holding whatever the user has; emptying it because
+            // the file is momentarily unparseable would destroy more than it
+            // protects.
+            //
+            // `configError` is deliberately untouched here and below. It also
+            // carries a failed sync and is cleared only by a pass that
+            // completes, so clearing it because the file happens to parse would
+            // turn the icon green while syncing is still broken.
+            settingsReloadError = "config.toml could not be re-read, so this form may be "
+                + "out of date. Nothing you have on screen has been lost.\n\n"
+                + error.localizedDescription
+            return
+        }
+        settingsReloadError = nil
+
+        // Nothing moved. Reseeding here would clear the selection and any
+        // half-typed draft on every panel open.
+        // One rule, before the branches: this set describes the file as last
+        // read. It is what the sync timer writes blockers under, so the purge
+        // warning has to judge against it whatever the form is doing.
+        savedSourceIDs = Set(onDisk.sources.map(\.id))
+
+        guard onDisk != baseline else {
+            // A file edited and then put back leaves nothing to overwrite, so
+            // a standing warning about "the file's version" is now false.
+            configChangedOnDisk = false
+            lastReadSourceIDs = nil
+            return
+        }
+
+        guard !formHasUnsavedInput(against: baseline) else {
+            // Unsaved work wins over an unattended reload — but the user is
+            // told, because saving will otherwise overwrite the other change.
+            configChangedOnDisk = true
+            // The form keeps the user's config, but `sourceOrigins` still names
+            // the ids the file had when it was opened. Any origin the file no
+            // longer holds cannot be matched to a block, and `ConfigWriter`
+            // treats an unmatchable source as new — synthesizing a block and
+            // dropping the real one, comments included. Saving is not safe
+            // until the user resolves it.
+            lastReadSourceIDs = Set(onDisk.sources.map(\.id))
+            return
+        }
+
+        adoptReloadedConfig(onDisk)
+    }
+
+    /// Whether the form holds anything the user would lose to a reload.
+    ///
+    /// The working config is only part of it. A half-typed filter entry lives
+    /// in `titleFilterDrafts`, a half-typed name in `sourceNameDraft`, and an
+    /// unanswered rename warning in `pendingRename` — none of which have
+    /// reached `editingConfig`. Comparing the config alone calls the form clean
+    /// and throws that typing away, which is the failure this whole path exists
+    /// to avoid.
+    private func formHasUnsavedInput(against baseline: Config) -> Bool {
+        editingConfig != baseline
+            || originsDiverged(from: baseline)
+            || sourceNameDraft.isDirty
+            || titleFilterDrafts.hasTypedText(of: selectedSource)
+            || pendingRename != nil
+    }
+
+    /// Whether the form's origins say something the baseline's do not.
+    ///
+    /// Removing a source and adding one back under the same id leaves that id
+    /// out of the map deliberately — it is a new block, not an edit of the old
+    /// one — and the resulting config can equal the baseline exactly. Comparing
+    /// configs alone calls that clean, and the reload would rebuild `id -> id`
+    /// and quietly turn it back into an edit.
+    private func originsDiverged(from baseline: Config) -> Bool {
+        sourceOrigins != Dictionary(uniqueKeysWithValues: baseline.sources.map { ($0.id, $0.id) })
+    }
+
+    /// Replaces the form's config with `config`, re-establishing the identity
+    /// the form is keyed by: the ids are new data, so the handles that point at
+    /// them have to be minted again.
+    private func adoptReloadedConfig(_ config: Config) {
+        let selectedID = selectedSource.flatMap { sourceHandles.id(of: $0) }
+
+        editingConfig = config
+        settingsBaseline = config
+        configChangedOnDisk = false
+        settingsReloadError = nil
+        lastReadSourceIDs = nil
+        // Same reason as in `openSettings`: the warning that protects blockers
+        // from being orphaned reads this set.
+        savedSourceIDs = Set(config.sources.map(\.id))
+        sourceHandles.seed(config.sources.map(\.id))
+        sourceOrigins = Dictionary(uniqueKeysWithValues: config.sources.map { ($0.id, $0.id) })
+        sourceNameDraft.removeAll()
+        titleFilterDrafts.removeAll()
+        renameError = nil
+        pendingRename = nil
+        // Both belong to the form this reload just replaced: a writer failure
+        // describes a config that is gone, and the row identities are keyed by
+        // handles nothing answers to any more.
+        saveError = nil
+        saveWarning = nil
+        titleFilterRowIDs.removeAll()
+        seedTitleFilterRowIDs()
+        // The list describes the accounts and calendars named by the config it
+        // was fetched for. A hand edit can name one the old list never had, and
+        // the pickers would then call a valid value missing.
+        loadCalendarChoices()
+
+        // Keep the user on the source they were looking at when it survived the
+        // external edit; otherwise fall back to the first.
+        let restored = selectedID.flatMap { sourceHandles.handle(of: $0) }
+        select(restored ?? config.sources.first.flatMap { sourceHandles.handle(of: $0.id) })
+    }
+
     func closeSettings() {
         // The list belongs to the form that asked for it, so it dies with it.
         calendarChoicesTask?.cancel()
         screen = .dashboard
         editingConfig = nil
+        settingsBaseline = nil
+        configChangedOnDisk = false
+        settingsReloadError = nil
+        lastReadSourceIDs = nil
         sourceOrigins = [:]
         pendingRename = nil
         sourceNameDraft.removeAll()
@@ -1021,7 +1216,52 @@ extension MenuBarModel {
     /// Everything that stops a save, in the order the user is most likely to be
     /// looking at.
     var settingsProblem: String? {
-        titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem ?? targetWritabilityProblem
+        // First: until the file can be read again, this form is of unknown
+        // age, and saving it would serialize the old copy over the file the
+        // user is part-way through fixing by hand.
+        settingsReloadError
+            ?? unmatchableSourcesProblem
+            ?? titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem
+            ?? targetWritabilityProblem
+    }
+
+    /// Why a save cannot be matched to the file's blocks, or nil.
+    ///
+    /// `sourceOrigins` names the id each source had when the form was opened,
+    /// and that is what `ConfigWriter` looks for. An origin the file no longer
+    /// holds cannot be matched, and the writer treats an unmatchable source as
+    /// new — synthesizing a block and dropping the real one, comments included.
+    ///
+    /// Recomputed on every read, so removing the offending source clears it.
+    var unmatchableSourcesProblem: String? {
+        guard let onDisk = lastReadSourceIDs else { return nil }
+        let origins = Set(sourceOrigins.values)
+        // Measured against what the form loaded, not against the origins,
+        // because removing a source drops its origin on purpose. Comparing
+        // with the origins reports the user's own deletion as a block that
+        // appeared on disk, and the deletion could then never be saved.
+        let loaded = Set((settingsBaseline?.sources ?? []).map(\.id))
+
+        // Both directions lose a block. An origin the file dropped cannot be
+        // matched, so the writer synthesizes one in its place; a block the file
+        // gained is matched by no source in the form, so the writer rebuilds
+        // without it. Either way a hand-written block and its comments go.
+        let lost = origins.subtracting(onDisk).sorted()
+        let gained = onDisk.subtracting(loaded).sorted()
+        guard !lost.isEmpty || !gained.isEmpty else { return nil }
+
+        func names(_ ids: [String]) -> String {
+            ids.map { "“\($0)”" }.joined(separator: ", ")
+        }
+        let what = if lost.isEmpty {
+            "has \(names(gained)), which this form never loaded"
+        } else if gained.isEmpty {
+            "no longer has \(names(lost))"
+        } else {
+            "no longer has \(names(lost)), and has gained \(names(gained))"
+        }
+        return "config.toml \(what). Saving would rewrite those blocks rather than edit "
+            + "them, losing their comments. Cancel to take what is on disk."
     }
 
     // MARK: Saving

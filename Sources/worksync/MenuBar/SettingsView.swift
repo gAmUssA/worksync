@@ -21,6 +21,12 @@ struct SettingsView: View {
             } else if model.editingConfig != nil {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        if let reloadError = model.settingsReloadError {
+                            reloadErrorNotice(reloadError)
+                        }
+                        if model.configChangedOnDisk {
+                            externalChangeNotice
+                        }
                         generalSection
                         targetSection
                         sourcesSection
@@ -533,6 +539,39 @@ struct SettingsView: View {
             return true
         }
         return false
+    }
+
+    /// The file changed while this form held unsaved edits. The edits were
+    /// kept — discarding what someone typed is the worse failure — so the only
+    /// thing left to do is say so, because Save will overwrite the other
+    /// change.
+    private var externalChangeNotice: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(
+                "config.toml changed on disk while you were editing. Your unsaved changes are "
+                    + "still here, and saving will overwrite the file's version. Cancel to take "
+                    + "what is on disk instead."
+            )
+        }
+        .font(.caption)
+        .foregroundStyle(.orange)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The file could not be re-read when the panel reopened. The form still
+    /// holds the user's work, so this explains why what is on screen may not
+    /// match the file rather than taking anything away.
+    private func reloadErrorNotice(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.octagon")
+            Text(message)
+        }
+        .font(.caption)
+        .foregroundStyle(.red)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Footer
