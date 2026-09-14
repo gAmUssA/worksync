@@ -29,13 +29,13 @@ final class PanelSheetWiringTests: XCTestCase {
         )
     }
 
-    func testASheetAttachedToThePanelKeepsItOpen() async throws {
+    func testASheetAttachedToThePanelKeepsItOpen() {
         let panel = makePanel()
         let sheet = makeSheet()
         defer { panel.endSheet(sheet) }
 
         panel.beginSheet(sheet, completionHandler: nil)
-        try await waitForSheet(sheet, attachedTo: panel)
+        assertAttached(sheet, to: panel)
 
         XCTAssertTrue(
             MenuBarPanel.keepsPanelOpen(eventWindow: sheet, panel: panel, hitsStatusButton: false),
@@ -43,14 +43,14 @@ final class PanelSheetWiringTests: XCTestCase {
         )
     }
 
-    func testASheetOfAnotherWindowStillDismisses() async throws {
+    func testASheetOfAnotherWindowStillDismisses() {
         let panel = makePanel()
         let other = makePanel()
         let sheet = makeSheet()
         defer { other.endSheet(sheet) }
 
         other.beginSheet(sheet, completionHandler: nil)
-        try await waitForSheet(sheet, attachedTo: other)
+        assertAttached(sheet, to: other)
 
         XCTAssertFalse(
             MenuBarPanel.keepsPanelOpen(eventWindow: sheet, panel: panel, hitsStatusButton: false),
@@ -79,16 +79,12 @@ final class PanelSheetWiringTests: XCTestCase {
         )
     }
 
-    /// `beginSheet` completes on a later turn of the run loop; polling the
-    /// relationship keeps this off a fixed sleep.
-    private func waitForSheet(
-        _ sheet: NSWindow, attachedTo parent: NSWindow, file: StaticString = #filePath,
-        line: UInt = #line
-    ) async throws {
-        for _ in 0 ..< 200 where sheet.sheetParent !== parent {
-            await Task.yield()
-            RunLoop.current.run(until: Date())
-        }
+    /// `beginSheet` establishes `sheetParent` before it returns, so there is
+    /// nothing to wait for. Asserted rather than assumed: a sheet that never
+    /// attached would make every assertion below pass vacuously.
+    private func assertAttached(
+        _ sheet: NSWindow, to parent: NSWindow, file: StaticString = #filePath, line: UInt = #line
+    ) {
         XCTAssertTrue(
             sheet.sheetParent === parent,
             "the sheet never attached, so this test would prove nothing", file: file, line: line
