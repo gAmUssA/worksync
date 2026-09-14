@@ -78,10 +78,14 @@ final class MenuBarModel {
     /// than resolved: the edits are the user's, and so is the choice.
     var configChangedOnDisk = false
 
-    /// Origins this form would write against that the file no longer has, so
-    /// a save could not match their blocks. Empty means every source in the
-    /// form can still be found on disk.
-    var sourceIdentitiesLost: [String]?
+    /// The source ids the config file had when it was last read. Nil until a
+    /// reload has seen the file change under an edited form.
+    ///
+    /// Stored rather than the verdict itself: the verdict depends on the
+    /// form's origins, which go on changing as the user edits, so a snapshot
+    /// taken at reload time goes stale the moment they remove the offending
+    /// source.
+    private var lastReadSourceIDs: Set<String>?
 
     /// Why the last reload could not be read, for the settings screen to show.
     /// Separate from `configError`, which nothing on this screen renders — an
@@ -487,7 +491,7 @@ extension MenuBarModel {
             settingsBaseline = config
             configChangedOnDisk = false
             settingsReloadError = nil
-            sourceIdentitiesLost = nil
+            lastReadSourceIDs = nil
             // The file's ids ARE the saved ids: they are what the sync timer
             // writes blockers under. Leaving this at the set captured when the
             // process started makes `SourceRenamePolicy.needsWarning` treat a
@@ -499,6 +503,10 @@ extension MenuBarModel {
             configError = nil
         } catch {
             editingConfig = nil
+            // The previous session's baseline describes a form that no longer
+            // exists; leaving it would let the next reload compare against it.
+            settingsBaseline = nil
+            lastReadSourceIDs = nil
             configError = error.localizedDescription
             settingsBlocked = "config.toml does not parse, so settings cannot be edited safely.\n\n"
                 + error.localizedDescription
@@ -520,7 +528,18 @@ extension MenuBarModel {
     /// outlive the file it was opened from — and a save from that form would
     /// write a stale copy over whatever the file now holds.
     func panelWillAppear() {
-        guard screen == .settings, let baseline = settingsBaseline else { return }
+        guard screen == .settings else { return }
+
+        // A previous open refused the file, so there is no form to refresh —
+        // only a notice about a file the user has probably just gone and
+        // fixed. Retrying is what they expect reopening the panel to do; a
+        // still-broken file simply blocks again with the current reason.
+        if settingsBlocked != nil {
+            openSettings()
+            return
+        }
+
+        guard let baseline = settingsBaseline else { return }
 
         let onDisk: Config
         do {
@@ -552,7 +571,7 @@ extension MenuBarModel {
             // A file edited and then put back leaves nothing to overwrite, so
             // a standing warning about "the file's version" is now false.
             configChangedOnDisk = false
-            sourceIdentitiesLost = nil
+            lastReadSourceIDs = nil
             return
         }
 
@@ -566,10 +585,7 @@ extension MenuBarModel {
             // treats an unmatchable source as new — synthesizing a block and
             // dropping the real one, comments included. Saving is not safe
             // until the user resolves it.
-            let missing = sourceOrigins.values.filter { origin in
-                !onDisk.sources.contains { $0.id == origin }
-            }
-            sourceIdentitiesLost = missing.isEmpty ? nil : Set(missing).sorted()
+            lastReadSourceIDs = Set(onDisk.sources.map(\.id))
             return
         }
 
@@ -601,7 +617,7 @@ extension MenuBarModel {
         settingsBaseline = config
         configChangedOnDisk = false
         settingsReloadError = nil
-        sourceIdentitiesLost = nil
+        lastReadSourceIDs = nil
         // Same reason as in `openSettings`: the warning that protects blockers
         // from being orphaned reads this set.
         savedSourceIDs = Set(config.sources.map(\.id))
@@ -637,7 +653,7 @@ extension MenuBarModel {
         settingsBaseline = nil
         configChangedOnDisk = false
         settingsReloadError = nil
-        sourceIdentitiesLost = nil
+        lastReadSourceIDs = nil
         sourceOrigins = [:]
         pendingRename = nil
         sourceNameDraft.removeAll()
@@ -1179,8 +1195,17 @@ extension MenuBarModel {
     }
 
     /// Why a save cannot be matched to the file's blocks, or nil.
+    ///
+    /// `sourceOrigins` names the id each source had when the form was opened,
+    /// and that is what `ConfigWriter` looks for. An origin the file no longer
+    /// holds cannot be matched, and the writer treats an unmatchable source as
+    /// new — synthesizing a block and dropping the real one, comments included.
+    ///
+    /// Recomputed on every read, so removing the offending source clears it.
     var unmatchableSourcesProblem: String? {
-        guard let lost = sourceIdentitiesLost, !lost.isEmpty else { return nil }
+        guard let onDisk = lastReadSourceIDs else { return nil }
+        let lost = Set(sourceOrigins.values).subtracting(onDisk).sorted()
+        guard !lost.isEmpty else { return nil }
         let names = lost.map { "“\($0)”" }.joined(separator: ", ")
         return "config.toml no longer has \(names). Saving would replace those blocks "
             + "rather than edit them, losing their comments. Cancel to take what is on disk."

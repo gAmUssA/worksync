@@ -262,6 +262,67 @@ final class SettingsReloadTests: XCTestCase {
         )
     }
 
+    // MARK: Recovering from a blocked form
+
+    /// A failed `openSettings` leaves the screen blocked. Fixing the file and
+    /// reopening the panel is the obvious way out, so the reload has to retry
+    /// rather than sit on a baseline from the session before.
+    func testFixingABrokenFileUnblocksTheFormOnTheNextShow() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        XCTAssertEqual(model.screen, .settings)
+
+        // The user opens Settings again while the file is broken.
+        recorder.configError = ConfigError.parseFailure("unexpected ]")
+        model.openSettings()
+        XCTAssertNotNil(model.settingsBlocked)
+        XCTAssertNil(model.editingConfig)
+
+        // They fix it and reopen the panel.
+        recorder.configError = nil
+        var fixed = try MenuBarFixture.twoSources()
+        fixed.sources[0].titleExcludes = ["lunch"]
+        recorder.config = fixed
+        model.panelWillAppear()
+
+        XCTAssertNil(model.settingsBlocked, "the blocked notice describes a file that now parses")
+        XCTAssertEqual(model.editingConfig?.sources.first?.titleExcludes, ["lunch"])
+    }
+
+    func testAStillBrokenFileLeavesTheFormBlocked() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        recorder.configError = ConfigError.parseFailure("unexpected ]")
+        model.openSettings()
+
+        model.panelWillAppear()
+
+        XCTAssertNotNil(model.settingsBlocked, "still broken, so still blocked")
+        XCTAssertNil(model.editingConfig)
+    }
+
+    /// The guard has to describe the form as it is now, not as it was at the
+    /// moment of the reload: removing the source that could not be matched
+    /// makes the save safe again.
+    func testRemovingTheUnmatchableSourceAllowsSavingAgain() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.updateSource(personal) { $0.titleTemplate = "Mine, unsaved" }
+
+        var renamedOnDisk = try MenuBarFixture.twoSources()
+        renamedOnDisk.sources[1].id = "trips"
+        recorder.config = renamedOnDisk
+        model.panelWillAppear()
+        XCTAssertNotNil(model.settingsProblem, "travel cannot be matched on disk")
+
+        let travel = try XCTUnwrap(model.handle(of: "travel"))
+        model.selectedSource = travel
+        model.removeSelectedSource()
+
+        XCTAssertNil(
+            model.settingsProblem,
+            "nothing in the form points at a block that is missing any more"
+        )
+    }
+
     // MARK: What a reload must not touch
 
     /// `configError` also carries a failed sync, and only a completed pass
