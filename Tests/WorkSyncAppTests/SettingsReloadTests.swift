@@ -379,6 +379,59 @@ final class SettingsReloadTests: XCTestCase {
         )
     }
 
+    /// Removing a source and re-adding one with the same id leaves that id out
+    /// of `sourceOrigins` on purpose — the writer must treat it as a new block,
+    /// not edit the old one. The resulting config can equal the baseline, so
+    /// comparing configs alone calls the form clean and the reload recreates
+    /// an `id -> id` origin, quietly turning it back into an edit of the old
+    /// block.
+    func testARemoveAndReAddSurvivesAReload() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let travel = try XCTUnwrap(model.handle(of: "travel"))
+        model.selectedSource = travel
+        model.removeSelectedSource()
+        model.addSource()
+        let added = try XCTUnwrap(model.selectedSource)
+        model.updateSource(added) { source in
+            source.id = "travel"
+            source.account = "Google"
+            source.calendar = "Travel"
+            source.titleMatches = ["flight", "hotel"]
+        }
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[0].titleExcludes = ["lunch"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        model.saveSettings()
+
+        let origins = try XCTUnwrap(recorder.savedConfigs.last?.origins)
+        XCTAssertNil(
+            origins["travel"],
+            "the writer is told this is a new block; a reload must not turn it back "
+                + "into an edit of the old one"
+        )
+    }
+
+    /// The refused-open path abandons the form but the alert binding reads
+    /// `pendingRename` directly, so it would stay attached over the blocked
+    /// notice, pointing at a handle nothing answers to.
+    func testARefusedOpenDropsAnOpenRenameAlert() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["personal", "travel"]
+        )
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.setSourceName("home", of: personal)
+        model.commitSourceName(of: personal)
+        XCTAssertNotNil(model.pendingRename)
+
+        recorder.configError = ConfigError.parseFailure("unexpected ]")
+        model.openSettings()
+
+        XCTAssertNotNil(model.settingsBlocked)
+        XCTAssertNil(model.pendingRename, "no alert over a form that has been abandoned")
+    }
+
     // MARK: Recovering from a blocked form
 
     /// A failed `openSettings` leaves the screen blocked. Fixing the file and

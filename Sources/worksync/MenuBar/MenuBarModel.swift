@@ -507,6 +507,12 @@ extension MenuBarModel {
             // exists; leaving it would let the next reload compare against it.
             settingsBaseline = nil
             lastReadSourceIDs = nil
+            // `SettingsView` binds the alert to this directly, so it would stay
+            // up over the blocked notice, pointing at a retired handle.
+            pendingRename = nil
+            renameError = nil
+            sourceNameDraft.removeAll()
+            titleFilterDrafts.removeAll()
             configError = error.localizedDescription
             settingsBlocked = "config.toml does not parse, so settings cannot be edited safely.\n\n"
                 + error.localizedDescription
@@ -612,9 +618,21 @@ extension MenuBarModel {
     /// to avoid.
     private func formHasUnsavedInput(against baseline: Config) -> Bool {
         editingConfig != baseline
+            || originsDiverged(from: baseline)
             || sourceNameDraft.isDirty
             || titleFilterDrafts.hasTypedText(of: selectedSource)
             || pendingRename != nil
+    }
+
+    /// Whether the form's origins say something the baseline's do not.
+    ///
+    /// Removing a source and adding one back under the same id leaves that id
+    /// out of the map deliberately — it is a new block, not an edit of the old
+    /// one — and the resulting config can equal the baseline exactly. Comparing
+    /// configs alone calls that clean, and the reload would rebuild `id -> id`
+    /// and quietly turn it back into an edit.
+    private func originsDiverged(from baseline: Config) -> Bool {
+        sourceOrigins != Dictionary(uniqueKeysWithValues: baseline.sources.map { ($0.id, $0.id) })
     }
 
     /// Replaces the form's config with `config`, re-establishing the identity
