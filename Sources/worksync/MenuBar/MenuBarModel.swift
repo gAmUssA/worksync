@@ -535,14 +535,29 @@ extension MenuBarModel {
         // half-typed draft on every panel open.
         guard onDisk != baseline else { return }
 
-        guard editingConfig == baseline else {
-            // Unsaved edits win over an unattended reload — but the user is
+        guard !formHasUnsavedInput(against: baseline) else {
+            // Unsaved work wins over an unattended reload — but the user is
             // told, because saving will otherwise overwrite the other change.
             configChangedOnDisk = true
             return
         }
 
         adoptReloadedConfig(onDisk)
+    }
+
+    /// Whether the form holds anything the user would lose to a reload.
+    ///
+    /// The working config is only part of it. A half-typed filter entry lives
+    /// in `titleFilterDrafts`, a half-typed name in `sourceNameDraft`, and an
+    /// unanswered rename warning in `pendingRename` — none of which have
+    /// reached `editingConfig`. Comparing the config alone calls the form clean
+    /// and throws that typing away, which is the failure this whole path exists
+    /// to avoid.
+    private func formHasUnsavedInput(against baseline: Config) -> Bool {
+        editingConfig != baseline
+            || sourceNameDraft.isDirty
+            || titleFilterDrafts.hasTypedText
+            || pendingRename != nil
     }
 
     /// Replaces the form's config with `config`, re-establishing the identity
@@ -1111,7 +1126,12 @@ extension MenuBarModel {
     /// Everything that stops a save, in the order the user is most likely to be
     /// looking at.
     var settingsProblem: String? {
-        titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem ?? targetWritabilityProblem
+        // First: until the file can be read again, this form is of unknown
+        // age, and saving it would serialize the old copy over the file the
+        // user is part-way through fixing by hand.
+        settingsReloadError
+            ?? titleFilterProblem ?? sourceFieldProblem ?? feedbackLoopProblem
+            ?? targetWritabilityProblem
     }
 
     // MARK: Saving

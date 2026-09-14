@@ -67,6 +67,16 @@ public struct TitleFilterDrafts: Equatable {
         texts[source] = nil
     }
 
+    /// Whether any field holds text the user typed and has not added yet.
+    ///
+    /// An unattended reload would throw this away, so it has to count as
+    /// unsaved input even though none of it has reached the working config.
+    public var hasTypedText: Bool {
+        texts.values.contains { fields in
+            fields.values.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+    }
+
     /// Drops everything — the selection moved, or the form is closing.
     public mutating func removeAll() {
         texts = [:]

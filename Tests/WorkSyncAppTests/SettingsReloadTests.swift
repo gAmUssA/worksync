@@ -130,6 +130,90 @@ final class SettingsReloadTests: XCTestCase {
         XCTAssertEqual(model.editingConfig?.sources.first?.titleExcludes, ["lunch"])
     }
 
+    // MARK: Typing that never reached the working config
+
+    /// A half-typed filter entry lives in `titleFilterDrafts`, not in
+    /// `editingConfig`, so comparing the config against the baseline calls the
+    /// form clean and the reload throws the typing away.
+    func testAHalfTypedFilterEntryIsNotDiscardedByAReload() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.setTitleFilterDraft(.excludes, to: "half-typed", of: personal)
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[1].titleExcludes = ["elsewhere"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        XCTAssertEqual(
+            model.titleFilterDraft(.excludes, of: personal), "half-typed",
+            "typing that has not been added yet is still the user's work"
+        )
+        XCTAssertTrue(model.configChangedOnDisk)
+    }
+
+    /// Same for the name field: the text is in `sourceNameDraft` until commit.
+    func testAHalfTypedSourceNameIsNotDiscardedByAReload() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.setSourceName("hom", of: personal)
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[1].titleExcludes = ["elsewhere"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        XCTAssertEqual(model.sourceName(of: personal), "hom", "mid-word, not yet committed")
+        XCTAssertTrue(model.configChangedOnDisk)
+    }
+
+    func testAnUnansweredRenameWarningIsNotDiscardedByAReload() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["personal", "travel"]
+        )
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.setSourceName("home", of: personal)
+        model.commitSourceName(of: personal)
+        XCTAssertNotNil(model.pendingRename, "the warning is up")
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[1].titleExcludes = ["elsewhere"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        XCTAssertNotNil(
+            model.pendingRename,
+            "a question the user is part-way through answering must survive"
+        )
+    }
+
+    // MARK: A failed reload must not let a stale form overwrite the file
+
+    func testSaveIsBlockedWhileTheFileCouldNotBeReRead() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        recorder.configError = ConfigError.parseFailure("unbalanced quote on line 4")
+
+        model.panelWillAppear()
+
+        XCTAssertNotNil(
+            model.settingsProblem,
+            "Save is disabled on settingsProblem alone, so the reload failure has to be in it"
+        )
+    }
+
+    func testAStaleFormDoesNotOverwriteTheFileItCouldNotRead() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        recorder.configError = ConfigError.parseFailure("unbalanced quote on line 4")
+        model.panelWillAppear()
+
+        model.saveSettings()
+
+        XCTAssertTrue(
+            recorder.savedConfigs.isEmpty,
+            "writing the in-memory copy would destroy the hand-edit the user is mid-way through"
+        )
+    }
+
     // MARK: The saved-id set the purge warning depends on
 
     /// `savedSourceIDs` means "ids the config file holds", which is what
