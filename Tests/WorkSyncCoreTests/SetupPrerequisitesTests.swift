@@ -100,18 +100,40 @@ final class SetupPrerequisitesTests: XCTestCase {
         XCTAssertNil(SetupPrerequisites.blocking(in: report.findings))
     }
 
-    func testAWarningNeverGates() {
+    func testANonPrerequisiteWarningNeverGates() {
         var findings = SetupPrerequisites.ordered.map { DoctorFinding.ok(id: $0, $0) }
         findings.append(
             DoctorFinding(
-                id: "log-size", title: "Log is large", severity: .error,
+                id: "log-size", title: "Log is large", severity: .warning,
+                remediation: "rotate it", exitCode: 0
+            )
+        )
+        XCTAssertTrue(SetupPrerequisites.isSatisfied(by: findings))
+        XCTAssertNil(SetupPrerequisites.blocking(in: findings))
+    }
+
+    /// Severity is not what decides it — membership is. An erroring
+    /// non-prerequisite must not gate either.
+    func testANonPrerequisiteErrorNeverGatesEither() {
+        var findings = SetupPrerequisites.ordered.map { DoctorFinding.ok(id: $0, $0) }
+        findings.append(
+            DoctorFinding(
+                id: "log-size", title: "Log is enormous", severity: .error,
                 remediation: "rotate it", exitCode: 1
             )
         )
-        XCTAssertTrue(
-            SetupPrerequisites.isSatisfied(by: findings),
-            "a non-prerequisite cannot hold setup open, whatever its severity"
+        XCTAssertTrue(SetupPrerequisites.isSatisfied(by: findings))
+    }
+
+    /// A warning ON a prerequisite does not gate: doctor's warnings never
+    /// change the exit code, and setup follows the same rule.
+    func testAWarningOnAPrerequisiteDoesNotGate() {
+        var findings = SetupPrerequisites.ordered.map { DoctorFinding.ok(id: $0, $0) }
+        findings[4] = DoctorFinding(
+            id: "scheduling", title: "Nothing registered at login", severity: .warning,
+            remediation: "turn it on", exitCode: 0
         )
+        XCTAssertTrue(SetupPrerequisites.isSatisfied(by: findings))
     }
 
     func testASkippedPrerequisiteIsNotSatisfied() {
@@ -123,13 +145,22 @@ final class SetupPrerequisitesTests: XCTestCase {
             "a check that could not run is exactly what setup exists to walk out of"
         )
         XCTAssertEqual(SetupPrerequisites.blocking(in: findings)?.id, "calendars-resolve")
+        guard case .failing = SetupPrerequisites.blocking(in: findings) else {
+            return XCTFail("a check that ran and was skipped is failing, not unreported")
+        }
     }
 
-    func testAMissingPrerequisiteIsNotSatisfied() {
+    func testAMissingPrerequisiteIsNotSatisfiedAndIsNamed() {
         let findings = SetupPrerequisites.ordered.dropLast().map { DoctorFinding.ok(id: $0, $0) }
         XCTAssertFalse(
             SetupPrerequisites.isSatisfied(by: Array(findings)),
             "a check that did not report is not a check that passed"
+        )
+        // The two answers have to agree: reporting unsatisfied while naming
+        // nothing leaves a caller unable to say what it is waiting for.
+        XCTAssertEqual(
+            SetupPrerequisites.blocking(in: Array(findings)),
+            .notReported(id: "scheduling")
         )
     }
 

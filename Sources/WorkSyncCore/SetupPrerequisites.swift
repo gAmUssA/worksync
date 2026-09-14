@@ -55,24 +55,50 @@ public enum SetupPrerequisites {
         ordered.compactMap { id in findings.first { $0.id == id } }
     }
 
-    /// Whether every prerequisite the report carries is satisfied.
+    /// Why setup cannot finish yet.
+    ///
+    /// A missing prerequisite is its own case rather than a nil finding: a
+    /// caller rendering "waiting on X" needs to name it either way, and a
+    /// check that did not report is a different problem from one that failed.
+    public enum Blocker: Equatable, Sendable {
+        /// The check ran and is not satisfied.
+        case failing(DoctorFinding)
+        /// The report does not mention this check at all.
+        case notReported(id: String)
+
+        public var id: String {
+            switch self {
+            case let .failing(finding): finding.id
+            case let .notReported(id): id
+            }
+        }
+    }
+
+    /// The first prerequisite, in dependency order, that is not satisfied.
     ///
     /// `.skipped` is not satisfied. A check that could not run because an
     /// earlier one failed is exactly the state setup exists to walk out of,
     /// and treating "unknown" as "fine" would drop the user into a dashboard
     /// that cannot work.
-    ///
-    /// A prerequisite missing from the report also counts as unsatisfied: a
-    /// check that did not report is not a check that passed.
-    public static func isSatisfied(by findings: [DoctorFinding]) -> Bool {
-        ordered.allSatisfy { id in
-            guard let finding = findings.first(where: { $0.id == id }) else { return false }
-            return finding.severity == .ok || finding.severity == .warning
+    public static func blocking(in findings: [DoctorFinding]) -> Blocker? {
+        for id in ordered {
+            guard let finding = findings.first(where: { $0.id == id }) else {
+                return .notReported(id: id)
+            }
+            if finding.severity != .ok, finding.severity != .warning {
+                return .failing(finding)
+            }
         }
+        return nil
     }
 
-    /// The first prerequisite that is not satisfied — what setup is waiting on.
-    public static func blocking(in findings: [DoctorFinding]) -> DoctorFinding? {
-        gating(in: findings).first { $0.severity != .ok && $0.severity != .warning }
+    /// Whether every prerequisite is satisfied.
+    ///
+    /// Derived from `blocking` rather than computed again: two answers to one
+    /// question drift, and they did — an earlier version reported unsatisfied
+    /// while `blocking` returned nil for a prerequisite missing from the
+    /// report, so a caller could not say what it was waiting for.
+    public static func isSatisfied(by findings: [DoctorFinding]) -> Bool {
+        blocking(in: findings) == nil
     }
 }
