@@ -187,6 +187,81 @@ final class SettingsReloadTests: XCTestCase {
         )
     }
 
+    /// Whitespace is typing too. Trimming before the check called this clean
+    /// and threw it away.
+    func testAWhitespaceOnlyDraftStillCountsAsUnsavedInput() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.setTitleFilterDraft(.excludes, to: "  ", of: personal)
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[1].titleExcludes = ["elsewhere"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        XCTAssertEqual(model.titleFilterDraft(.excludes, of: personal), "  ")
+        XCTAssertTrue(model.configChangedOnDisk)
+    }
+
+    // MARK: State that must not outlive the config it belonged to
+
+    func testAdoptingAReloadClearsAStaleWriterError() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        recorder.saveError = ConfigError.parseFailure("disk full")
+        model.saveSettings()
+        XCTAssertNotNil(model.saveError, "the failed save is what sets this up")
+
+        recorder.saveError = nil
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[0].titleExcludes = ["lunch"]
+        recorder.config = changed
+        model.panelWillAppear()
+
+        XCTAssertNil(
+            model.saveError,
+            "the error belonged to a form this reload replaced; the footer must not still show it"
+        )
+    }
+
+    func testAFileRestoredToTheBaselineClearsTheWarning() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(config: MenuBarFixture.twoSources())
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.updateSource(personal) { $0.titleTemplate = "Mine" }
+
+        var changed = try MenuBarFixture.twoSources()
+        changed.sources[1].titleExcludes = ["elsewhere"]
+        recorder.config = changed
+        model.panelWillAppear()
+        XCTAssertTrue(model.configChangedOnDisk)
+
+        // Someone undid the external edit.
+        recorder.config = try MenuBarFixture.twoSources()
+        model.panelWillAppear()
+
+        XCTAssertFalse(
+            model.configChangedOnDisk,
+            "there is no other version left to overwrite, so the warning is a lie"
+        )
+    }
+
+    func testADirtyFormStillLearnsTheFilesNewIDs() async throws {
+        let (model, recorder, _) = try await MenuBarFixture.opened(
+            config: MenuBarFixture.twoSources(), savedSourceIDs: ["personal", "travel"]
+        )
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        model.updateSource(personal) { $0.titleTemplate = "Mine, unsaved" }
+
+        var renamedOnDisk = try MenuBarFixture.twoSources()
+        renamedOnDisk.sources[1].id = "trips"
+        recorder.config = renamedOnDisk
+        model.panelWillAppear()
+
+        XCTAssertEqual(
+            model.savedSourceIDs, ["personal", "trips"],
+            "the edits stay, but the file's ids are what blockers are written under"
+        )
+    }
+
     // MARK: A failed reload must not let a stale form overwrite the file
 
     func testSaveIsBlockedWhileTheFileCouldNotBeReRead() async throws {

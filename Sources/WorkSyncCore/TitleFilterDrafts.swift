@@ -71,10 +71,12 @@ public struct TitleFilterDrafts: Equatable {
     ///
     /// An unattended reload would throw this away, so it has to count as
     /// unsaved input even though none of it has reached the working config.
+    ///
+    /// Not trimmed. Whitespace is refused as an *entry*, but it is still
+    /// something the user typed, and it is what a half-finished field looks
+    /// like between two words. Treating it as nothing discards it silently.
     public var hasTypedText: Bool {
-        texts.values.contains { fields in
-            fields.values.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        }
+        texts.values.contains { fields in fields.values.contains { !$0.isEmpty } }
     }
 
     /// Drops everything — the selection moved, or the form is closing.

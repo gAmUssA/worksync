@@ -533,12 +533,21 @@ extension MenuBarModel {
 
         // Nothing moved. Reseeding here would clear the selection and any
         // half-typed draft on every panel open.
-        guard onDisk != baseline else { return }
+        guard onDisk != baseline else {
+            // A file edited and then put back leaves nothing to overwrite, so
+            // a standing warning about "the file's version" is now false.
+            configChangedOnDisk = false
+            return
+        }
 
         guard !formHasUnsavedInput(against: baseline) else {
             // Unsaved work wins over an unattended reload — but the user is
             // told, because saving will otherwise overwrite the other change.
             configChangedOnDisk = true
+            // The working config stays theirs; the saved-id set does not belong
+            // to it. It describes the file, which is what the sync timer writes
+            // blockers under, so the purge warning has to judge against this.
+            savedSourceIDs = Set(onDisk.sources.map(\.id))
             return
         }
 
@@ -579,6 +588,12 @@ extension MenuBarModel {
         titleFilterDrafts.removeAll()
         renameError = nil
         pendingRename = nil
+        // Both belong to the form this reload just replaced: a writer failure
+        // describes a config that is gone, and the row identities are keyed by
+        // handles nothing answers to any more.
+        saveError = nil
+        saveWarning = nil
+        titleFilterRowIDs.removeAll()
         seedTitleFilterRowIDs()
 
         // Keep the user on the source they were looking at when it survived the
