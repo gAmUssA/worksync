@@ -967,7 +967,11 @@ extension MenuBarModel {
         // the alert was up. Either way the user agreed to something that is no
         // longer true, so the field goes back to what the config holds.
         guard let liveID = sourceHandles.id(of: rename.source), liveID == rename.from else {
-            seedSourceIDDraft(for: selectedSource)
+            // Reseeded WITHOUT committing: `seedSourceIDDraft` commits the
+            // draft first, and the draft still holds `rename.to` — the rename
+            // this branch exists to discard. It would re-apply it, or raise the
+            // warning again.
+            select(selectedSource)
             return
         }
 
@@ -988,7 +992,14 @@ extension MenuBarModel {
 
     /// Cancelling puts the field back to the id the config still holds, so it
     /// never shows a name that was not applied.
+    ///
+    /// A no-op when no rename is pending. SwiftUI writes `false` through the
+    /// alert's binding as it closes, so this also runs after
+    /// `confirmPendingRename` has already dealt with it — and an unconditional
+    /// revert there would wipe the rejected name out of the field, leaving the
+    /// old id on screen under an error describing a name no longer visible.
     func cancelPendingRename() {
+        guard pendingRename != nil else { return }
         pendingRename = nil
         sourceNameDraft.revert()
     }

@@ -74,7 +74,7 @@ final class SettingsRenameConfirmTests: XCTestCase {
     // does move an id without the handle, the question the user answered
     // stops describing the source before this notices.
 
-    func testConfirmingASourceThatWasRemovedDoesNothing() async throws {
+    func testRemovingTheSourceTakesItsRenameQuestionWithIt() async throws {
         let (model, _, _) = try await opened()
         let personal = try XCTUnwrap(model.handle(of: "personal"))
         try raiseRename(model, of: personal, to: "home")
@@ -82,10 +82,38 @@ final class SettingsRenameConfirmTests: XCTestCase {
         model.selectedSource = personal
         model.removeSelectedSource()
 
-        model.confirmPendingRename()
-
+        // Named for what actually happens: removal clears `pendingRename`
+        // itself, so the alert is gone before any confirmation can arrive.
+        // An earlier version of this test called `confirmPendingRename()` here
+        // and claimed to cover the stale-handle guard — but that guard is never
+        // reached this way, so it was asserting nothing.
+        XCTAssertNil(model.pendingRename, "no alert survives the source it asks about")
         XCTAssertEqual(model.editingConfig?.sources.map(\.id), ["travel"])
-        XCTAssertNil(model.pendingRename)
+
+        model.confirmPendingRename()
+        XCTAssertEqual(model.editingConfig?.sources.map(\.id), ["travel"], "and it stays gone")
+    }
+
+    /// SwiftUI writes `false` through the alert's binding as it closes, which
+    /// calls `cancelPendingRename`. An unconditional revert there wipes the
+    /// rejected name out of the field, leaving the old id under an error about
+    /// a name that is no longer on screen.
+    func testTheRejectedNameStaysInTheFieldAfterTheAlertCloses() async throws {
+        let (model, _, _) = try await opened()
+        let personal = try XCTUnwrap(model.handle(of: "personal"))
+        try raiseRename(model, of: personal, to: "shared")
+        let travel = try XCTUnwrap(model.handle(of: "travel"))
+        model.updateSource(travel) { $0.id = "shared" }
+
+        model.confirmPendingRename()
+        // What the view does on the way out.
+        model.cancelPendingRename()
+
+        XCTAssertEqual(
+            model.sourceName(of: personal), "shared",
+            "the name the error is about has to still be the name in the field"
+        )
+        XCTAssertNotNil(model.renameError)
     }
 
     // MARK: The ordinary path still works
